@@ -1,0 +1,13 @@
+review.csv
+imported.bean
+
+*.eml
+*.xlsx
+*.csv
+
+config.personal.toml.bak
+accounts.personal.bean
+
+__pycache__/
+*.py[cod]
+.pytest_cache/

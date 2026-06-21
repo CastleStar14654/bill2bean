@@ -1,0 +1,80 @@
+[defaults]
+expense_account = "Expenses:Other"
+income_account = "Income:Other"
+manual_expense_account = "Expenses:Manual"
+manual_income_account = "Income:Manual"
+cashback_income_account = "Income:Rebate:Bank"
+aa_account = "Assets:Receivables:Other"
+receivable_account = "Assets:Receivables:Employer"
+family_card_receivable_account = "Assets:Receivables:Partner"
+discount_income_account = "Income:Other"
+
+[[account_rules]]
+pattern = "工商银行信用卡\\(1234\\)|ICBC信用卡\\(1234\\)"
+account = "Liabilities:Credit:Bank:Card1234"
+
+[[account_rules]]
+pattern = "工商银行储蓄卡\\(1234\\)"
+account = "Assets:Current:Bank:Checking1234"
+
+[[account_rules]]
+pattern = "账户余额|余额宝"
+account = "Assets:Current:Alipay:YuEBao"
+
+[[account_rules]]
+pattern = "零钱通"
+account = "Assets:Current:WeChat:LQT"
+
+[[account_rules]]
+pattern = "花呗"
+account = "Liabilities:Credit:Alipay:Huabei"
+
+[[account_rules]]
+pattern = "alipay|支付宝"
+account = "Assets:Current:Alipay:YuEBao"
+
+[[expense_rules]]
+pattern = "咖啡|奶茶|饮品|甜汤"
+account = "Expenses:Food:Drink"
+
+[[expense_rules]]
+pattern = "便利店|超市|杂货|生鲜"
+account = "Expenses:Grocery"
+
+[[expense_rules]]
+pattern = "餐饮|外卖|团购|餐厅|饭店|汉堡|寿司|牛肉粉|比萨"
+account = "Expenses:Food:Dining"
+
+[[expense_rules]]
+pattern = "单位食堂|校园卡|一卡通充值"
+account = "Expenses:Food:Workplace"
+
+[[expense_rules]]
+pattern = "轨道交通|地铁|公交"
+account = "Expenses:Traffic:Urban:Public"
+
+[[expense_rules]]
+pattern = "医院|药"
+account = "Expenses:Medical"
+
+[[expense_rules]]
+pattern = "电力|国网"
+account = "Expenses:Utilities"
+
+[[income_rules]]
+pattern = "余额宝.*收益发放"
+account = "Income:Current:Alipay:YuEBao"
+
+[[income_rules]]
+pattern = "发票有奖"
+account = "Income:Other"
+
+[[income_rules]]
+pattern = "奖金"
+account = "Income:Prize"
+
+[manual_review]
+patterns = [
+  "财付通\\(银联云闪付\\)",
+  "AA",
+]

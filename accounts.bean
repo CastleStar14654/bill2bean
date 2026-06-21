@@ -1,0 +1,28 @@
+option "title" "Sample Ledger"
+option "operating_currency" "CNY"
+
+2020-01-01 open Assets:Current:Bank:Checking1234 CNY
+2020-01-01 open Assets:Current:Alipay:YuEBao CNY
+2020-01-01 open Assets:Current:WeChat:LQT CNY
+2020-01-01 open Assets:Receivables:Employer CNY
+2020-01-01 open Assets:Receivables:Partner CNY
+2020-01-01 open Assets:Receivables:Other CNY
+
+2020-01-01 open Liabilities:Credit:Bank:Card1234 CNY
+2020-01-01 open Liabilities:Credit:Alipay:Huabei CNY
+
+2020-01-01 open Expenses:Other CNY
+2020-01-01 open Expenses:Manual CNY
+2020-01-01 open Expenses:Food:Dining CNY
+2020-01-01 open Expenses:Food:Drink CNY
+2020-01-01 open Expenses:Food:Workplace CNY
+2020-01-01 open Expenses:Grocery CNY
+2020-01-01 open Expenses:Traffic:Urban:Public CNY
+2020-01-01 open Expenses:Medical CNY
+2020-01-01 open Expenses:Utilities CNY
+
+2020-01-01 open Income:Other CNY
+2020-01-01 open Income:Manual CNY
+2020-01-01 open Income:Prize CNY
+2020-01-01 open Income:Rebate:Bank CNY
+2020-01-01 open Income:Current:Alipay:YuEBao CNY
