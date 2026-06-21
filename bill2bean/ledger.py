@@ -308,12 +308,19 @@ class TransactionList:
             return "退款" in tx.metadata.get("交易类型", "") or "退款" in tx.metadata.get("当前状态", "")
         return False
 
-    def write_review_csv(self, path: str | Path) -> None:
+    def write_review_csv(
+        self,
+        path: str | Path,
+        previous_rows: list[dict[str, str]] | None = None,
+    ) -> None:
+        rows = [review_row(tx) for tx in self.txs]
+        if previous_rows:
+            rows = merge_previous_review_rows(rows, previous_rows)
         with Path(path).open("w", encoding="utf-8-sig", newline="") as fh:
             writer = csv.DictWriter(fh, fieldnames=REVIEW_FIELDS)
             writer.writeheader()
-            for tx in review_order(self.txs):
-                writer.writerow(review_row(tx))
+            for row in review_row_order(rows):
+                writer.writerow(row)
 
 
 def append_reason(current: str, reason: str) -> str:
@@ -340,63 +347,93 @@ def max_review(a: ReviewLevel, b: ReviewLevel) -> ReviewLevel:
     return a if order[a] >= order[b] else b
 
 
-def review_order(txs: list[BillTransaction]) -> list[BillTransaction]:
-    ordered = sorted(txs, key=lambda t: (t.time, t.source, t.uid))
-    by_uid = {tx.uid: tx for tx in ordered}
-    duplicate_children: dict[str, list[BillTransaction]] = {}
-    duplicate_uids: set[str] = set()
-    for tx in ordered:
-        if not is_skip_check_duplicate(tx):
+def merge_previous_review_rows(
+    rows: list[dict[str, str]],
+    previous_rows: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    previous_by_uid = {
+        row["uid"]: row
+        for row in previous_rows
+        if row.get("uid")
+    }
+    merged_rows: list[dict[str, str]] = []
+    for row in rows:
+        previous = previous_by_uid.get(row.get("uid", ""))
+        if not previous:
+            merged_rows.append(row)
             continue
-        parent_uid = duplicate_parent_uid(tx.review_reason)
+        merged = row.copy()
+        for field in REVIEW_FIELDS:
+            if field in previous:
+                merged[field] = previous.get(field, "")
+        merged["uid"] = row["uid"]
+        merged_rows.append(merged)
+    return merged_rows
+
+
+def review_row_order(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    ordered = sorted(
+        rows,
+        key=lambda r: (r.get("time", ""), r.get("source", ""), r.get("uid", "")),
+    )
+    by_uid = {row.get("uid", ""): row for row in ordered if row.get("uid")}
+    duplicate_children: dict[str, list[dict[str, str]]] = {}
+    duplicate_uids: set[str] = set()
+    for row in ordered:
+        if not is_skip_check_duplicate(row):
+            continue
+        parent_uid = duplicate_parent_uid(row.get("review_reason", ""))
         if parent_uid and parent_uid in by_uid:
-            duplicate_children.setdefault(parent_uid, []).append(tx)
-            duplicate_uids.add(tx.uid)
+            duplicate_children.setdefault(parent_uid, []).append(row)
+            duplicate_uids.add(row.get("uid", ""))
 
     post_manual = [
-        tx
-        for tx in ordered
-        if is_post_manual(tx) and tx.uid not in duplicate_uids
+        row
+        for row in ordered
+        if is_post_manual(row) and row.get("uid", "") not in duplicate_uids
     ]
     initial = [
-        tx
-        for tx in ordered
-        if not is_post_manual(tx) and not is_skip_ok(tx) and tx.uid not in duplicate_uids
+        row
+        for row in ordered
+        if not is_post_manual(row)
+        and not is_skip_ok(row)
+        and row.get("uid", "") not in duplicate_uids
     ]
-    skip_ok = [tx for tx in ordered if is_skip_ok(tx)]
-    result: list[BillTransaction] = []
+    skip_ok = [row for row in ordered if is_skip_ok(row)]
+    result: list[dict[str, str]] = []
     emitted: set[str] = set()
 
-    def emit(tx: BillTransaction) -> None:
-        if tx.uid in emitted:
+    def emit(row: dict[str, str]) -> None:
+        uid = row.get("uid", "")
+        if uid in emitted:
             return
-        emitted.add(tx.uid)
-        result.append(tx)
-        for child in duplicate_children.get(tx.uid, []):
+        emitted.add(uid)
+        result.append(row)
+        for child in duplicate_children.get(uid, []):
             emit(child)
 
-    for tx in post_manual:
-        emit(tx)
-    for tx in initial:
-        emit(tx)
-    for tx in skip_ok:
-        emit(tx)
+    for row in post_manual:
+        emit(row)
+    for row in initial:
+        emit(row)
+    for row in skip_ok:
+        emit(row)
     return result
 
 
-def is_post_manual(tx: BillTransaction) -> bool:
-    return tx.action == "post" and tx.review_level == ReviewLevel.MANUAL
+def is_post_manual(row: dict[str, str]) -> bool:
+    return row.get("action") == "post" and row.get("review_level") == ReviewLevel.MANUAL.value
 
 
-def is_skip_ok(tx: BillTransaction) -> bool:
-    return tx.action == "skip" and tx.review_level == ReviewLevel.OK
+def is_skip_ok(row: dict[str, str]) -> bool:
+    return row.get("action") == "skip" and row.get("review_level") == ReviewLevel.OK.value
 
 
-def is_skip_check_duplicate(tx: BillTransaction) -> bool:
+def is_skip_check_duplicate(row: dict[str, str]) -> bool:
     return (
-        tx.action == "skip"
-        and tx.review_level == ReviewLevel.CHECK
-        and bool(duplicate_parent_uid(tx.review_reason))
+        row.get("action") == "skip"
+        and row.get("review_level") == ReviewLevel.CHECK.value
+        and bool(duplicate_parent_uid(row.get("review_reason", "")))
     )
 
 
@@ -452,4 +489,3 @@ def extract_accounts(path: str | Path) -> set[str]:
         if match:
             accounts.add(match.group(1))
     return accounts
-

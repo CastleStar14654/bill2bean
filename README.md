@@ -13,6 +13,17 @@ python3 -m bill2bean.cli review -c config.toml -o review.csv \
   '中国工商银行客户对账单2026-06-18.eml'
 ```
 
+如果已经有上一次人工编辑过的核对表，可以在重新生成时复用旧审核结果：
+
+```bash
+python3 -m bill2bean.cli review -c config.toml -o review.csv \
+  --previous-review review.csv \
+  '支付宝交易明细(20260601-20260618).csv' \
+  '微信支付账单流水文件20260601_20260618_20260618172913.xlsx'
+```
+
+`--previous-review` 会按 `uid` 匹配旧核对表中的交易。匹配成功时，旧 CSV 中已编辑的 action、账户、AA/share、备注、tags/links 等核对字段会覆盖本次自动生成结果；未匹配的新交易仍按当前规则生成。这样可以在信用卡出账日前用微信/支付宝账单增量更新，出账后再加入信用卡账单定稿。
+
 编辑 `review.csv` 后导出：
 
 ```bash

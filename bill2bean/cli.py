@@ -17,6 +17,10 @@ def main(argv: list[str] | None = None) -> int:
     review.add_argument("files", nargs="+")
     review.add_argument("-c", "--config", default="config.toml")
     review.add_argument("-o", "--output", default="review.csv")
+    review.add_argument(
+        "--previous-review",
+        help="reuse edited rows from an existing review CSV when transaction uid matches",
+    )
 
     export = sub.add_parser("export", help="export reviewed CSV to Beancount")
     export.add_argument("review_csv")
@@ -53,7 +57,8 @@ def main(argv: list[str] | None = None) -> int:
         txs = []
         for filename in args.files:
             txs.extend(parser_for(filename).parse(filename))
-        TransactionList(txs, config).normalize().write_review_csv(args.output)
+        previous_rows = read_review_csv(args.previous_review) if args.previous_review else None
+        TransactionList(txs, config).normalize().write_review_csv(args.output, previous_rows)
         print(f"wrote {args.output} with {len(txs)} rows")
         return 0
 
