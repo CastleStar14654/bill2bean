@@ -10,10 +10,14 @@ from email.parser import BytesParser
 from html.parser import HTMLParser
 from pathlib import Path
 import re
+from typing import TYPE_CHECKING
 import zipfile
 from xml.etree import ElementTree as ET
 
 from .model import BillTransaction, Direction, ReviewLevel, ReviewReasons
+
+if TYPE_CHECKING:
+    from .config import Config
 
 
 class BillParser(ABC):
@@ -174,6 +178,9 @@ class _TableParser(HTMLParser):
 class IcbcEmailParser(BillParser):
     source = "icbc_credit"
 
+    def __init__(self, config: Config | None = None) -> None:
+        self.config = config
+
     def parse(self, path: str | Path) -> list[BillTransaction]:
         msg = BytesParser(policy=policy.default).parsebytes(Path(path).read_bytes())
         html = next(
@@ -188,12 +195,11 @@ class IcbcEmailParser(BillParser):
         previous_postable: BillTransaction | None = None
         detail_rows: list[tuple[int, list[str]]] = []
         for row_number, row in enumerate(parser.rows, start=1):
-            if "人民币(本位币) 交 易 明 细" in " ".join(row):
+            row_text = " ".join(row)
+            if "人民币(本位币) 交 易 明 细" in row_text or "外 币 交 易 明 细" in row_text:
                 in_details = True
                 continue
             if in_details and len(row) >= 7 and re.fullmatch(r"\d{4}", row[0]):
-                if "/RMB" not in row[6]:
-                    continue
                 detail_rows.append((row_number, row[:7]))
         rmb_card = self._rmb_unionpay_card(detail_rows)
         for row_number, row in detail_rows:
@@ -221,16 +227,33 @@ class IcbcEmailParser(BillParser):
     def _parse_detail_row(
         self, row: list[str], row_number: int, rmb_card: str | None
     ) -> BillTransaction:
-        card, txn_date, post_date, txn_type, merchant, _txn_amount, post_amount = row
-        amount_text, flow = self._parse_post_amount(post_amount)
+        card, txn_date, post_date, txn_type, merchant, txn_amount, post_amount = row
+        txn_amount_text, txn_currency = self._parse_txn_amount(txn_amount)
+        amount_text, currency, flow = self._parse_post_amount(post_amount)
+        normalized_txn_amount = str(_money(txn_amount_text))
+        normalized_post_amount = str(_money(amount_text))
         account_card = card
         metadata = {
             "card": card,
+            "txn_date": txn_date,
             "post_date": post_date,
             "txn_type": txn_type,
+            "txn_amount": txn_amount,
+            "txn_amount_value": normalized_txn_amount,
+            "txn_currency": txn_currency,
             "post_amount": post_amount,
+            "post_amount_value": normalized_post_amount,
+            "post_currency": currency,
         }
-        if rmb_card and card != rmb_card and self._is_repayment_like(txn_type, merchant, flow):
+        if txn_currency != currency:
+            metadata["original_amount"] = normalized_txn_amount
+            metadata["original_currency"] = txn_currency
+        if (
+            currency == "CNY"
+            and rmb_card
+            and card != rmb_card
+            and self._is_repayment_like(txn_type, merchant, flow)
+        ):
             account_card = rmb_card
             metadata["account_card"] = account_card
             metadata["original_card"] = card
@@ -244,38 +267,58 @@ class IcbcEmailParser(BillParser):
         if "财付通(银联云闪付)" in merchant:
             review_level = ReviewLevel.MANUAL
             review_reason = "unionpay_via_tenpay_missing_from_wechat"
-        return BillTransaction(
+        tx = BillTransaction(
             source=self.source,
             source_id=f"row:{row_number}|" + "|".join(row),
-            time=datetime.strptime(txn_date, "%Y-%m-%d"),
+            time=datetime.strptime(post_date, "%Y-%m-%d"),
             payee=merchant,
             narration=txn_type,
             amount=_money(amount_text),
+            currency=currency,
             direction=direction,
             source_account_hint=f"ICBC信用卡({account_card})",
             review_level=review_level,
             review_reason=review_reason,
             metadata=metadata,
         )
+        if (
+            tx.direction == Direction.INCOME
+            and self.config
+            and self.config.is_credit_card_cashback(tx)
+        ):
+            tx.metadata["is_credit_card_cashback"] = "true"
+            tx.review_reason.add("credit_card_cashback")
+        return tx
 
-    def _parse_post_amount(self, value: str) -> tuple[str, str]:
+    def _parse_txn_amount(self, value: str) -> tuple[str, str]:
+        match = re.match(r"([\d,.]+)/([A-Z]+)$", value)
+        if not match:
+            raise ValueError(f"unsupported ICBC transaction amount: {value}")
+        return match.group(1), self._beancount_currency(match.group(2))
+
+    def _parse_post_amount(self, value: str) -> tuple[str, str, str]:
         match = re.match(r"([\d,.]+)/([A-Z]+)\(([^)]+)\)", value)
         if not match:
             raise ValueError(f"unsupported ICBC amount: {value}")
-        currency = match.group(2)
-        if currency != "RMB":
-            raise ValueError(f"only RMB is supported for now: {value}")
-        return match.group(1), match.group(3)
+        return match.group(1), self._beancount_currency(match.group(2)), match.group(3)
+
+    def _beancount_currency(self, currency: str) -> str:
+        return "CNY" if currency == "RMB" else currency
 
     def _rmb_unionpay_card(self, rows: list[tuple[int, list[str]]]) -> str | None:
         cards: Counter[str] = Counter()
         for _row_number, row in rows:
             card, _txn_date, _post_date, txn_type, merchant, _txn_amount, post_amount = row
             try:
-                _amount_text, flow = self._parse_post_amount(post_amount)
+                _amount_text, currency, flow = self._parse_post_amount(post_amount)
             except ValueError:
                 continue
-            if flow == "支出" and txn_type not in {"刷卡金"} and "退款" not in txn_type:
+            if (
+                currency == "CNY"
+                and flow == "支出"
+                and txn_type not in {"刷卡金"}
+                and "退款" not in txn_type
+            ):
                 cards[card] += 1
         if not cards:
             return None
@@ -285,7 +328,7 @@ class IcbcEmailParser(BillParser):
         return flow == "存入" and txn_type in {"信用卡还款", "转账"} and "退款" not in merchant
 
 
-def parser_for(path: str | Path) -> BillParser:
+def parser_for(path: str | Path, config: Config | None = None) -> BillParser:
     name = Path(path).name
     suffix = Path(path).suffix.lower()
     if "支付宝" in name and suffix == ".csv":
@@ -293,7 +336,7 @@ def parser_for(path: str | Path) -> BillParser:
     if "微信" in name and suffix == ".xlsx":
         return WechatXlsxParser()
     if "工商银行" in name and suffix == ".eml":
-        return IcbcEmailParser()
+        return IcbcEmailParser(config)
     raise ValueError(f"cannot infer parser for {path}")
 
 

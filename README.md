@@ -64,7 +64,9 @@ python3 -m bill2bean.cli export review.csv -o imported.bean \
 
 ## 核对 CSV 约定
 
-`review.csv` 的列顺序按人工核对流程排列：固定长度的 `uid` 放在行首，`action` 和 `review_level` 之后紧跟初始常为空、需要人工填写的 `aa_amount`、`share`、`share_amount`、`discount_amount`；`direction`、`amount`、`currency` 紧跟 `source`，`review_reason` 放在 `currency` 之后，较长的 `source_id` 放在末尾。时间只输出 `time`，其中包含完整日期和时间；导出 Beancount 时会从 `time` 中取日期。
+`review.csv` 的列顺序按人工核对流程排列：固定长度的 `uid` 放在行首，`action` 和 `review_level` 之后紧跟初始常为空、需要人工填写的 `aa_amount`、`share`、`share_amount`、`discount_amount`；`direction`、`amount`、`currency` 紧跟 `source`，`review_reason` 放在金额信息之后，较长的 `source_id` 放在末尾。时间只输出 `time`，其中包含完整日期和时间；导出 Beancount 时会从 `time` 中取日期。
+
+工行信用卡外币账单以“记账金额/币种”为 `amount` 和 `currency`，日期使用记账日。如果“交易金额/币种”和“记账金额/币种”不同，会额外填入 `original_amount` 和 `original_currency`；导出 Beancount 时消费分录会使用 `@@`，例如 `13100.00 CLP @@ 14.21 USD`。
 
 输出行按分段排序：最前面优先输出 `post,manual` 人工审核行；如果这些行有 duplicate 子行，duplicate 会紧跟父行，方便对照。然后输出不含 `skip,ok` 且不含 `skip,check` duplicate 的主审核区，并同样把 `review_reason` 包含 `duplicate` 且指向另一行 `uid` 的 `skip,check` 行插到父行后面；最后把 `skip,ok` 行按时间顺序放到表尾。
 
@@ -77,6 +79,14 @@ python3 -m bill2bean.cli export review.csv -o imported.bean \
 - `receivable`：公务出差等报销条目。整笔实付净额进入 `receivable_account`，默认 `Assets:Receivables:Employer`。
 - `transfer`：账户间转账。支付平台的信用卡还款会先作为候选转账，匹配到信用卡账单还款入账后再补全目标信用卡账户。
 - `merge_cashback`：工商银行刷卡金自动行，不单独导出，会合并进上一条信用卡消费。按日期或来源过滤导出时，只要父消费被导出，对应刷卡金仍会合并进去。
+
+信用卡返现商户可以在配置中添加规则。规则只匹配商户名，可选限制卡号；不要用“境外退货”等交易类型识别返现，因为真实退货也可能使用同一交易类型。配置规则识别出的返现会作为独立收入导出到 `cashback_income_account`，适合外币卡返现和原消费日期相隔较远的情况；工行人民币“刷卡金”仍使用 `merge_cashback` 合并到对应消费。
+
+```toml
+[[credit_card_cashback_rules]]
+merchant_pattern = "Visa|Rewards|Rebate"
+card_pattern = "1234"
+```
 
 `review_level` 为 `manual` 或 `check` 的行建议人工看一眼。`财付通(银联云闪付)` 会自动进入 `manual`，因为微信账单通常没有对应明细。
 

@@ -161,7 +161,13 @@ class BillTransaction:
         )
 
     def is_refund(self) -> bool:
-        if self.source == "icbc_credit" and self.metadata.get("txn_type") == "退款":
+        if self.action == "merge_cashback" or self.metadata.get("is_credit_card_cashback") == "true":
+            return False
+        if self.source == "icbc_credit" and self.metadata.get("txn_type") in {
+            "退款",
+            "退货",
+            "境外退货",
+        }:
             return True
         if self.source == "wechat":
             return "退款" in self.metadata.get("交易类型", "") or "退款" in self.metadata.get("当前状态", "")

@@ -31,6 +31,21 @@ class MerchantAliasRule:
 
 
 @dataclass
+class CreditCardCashbackRule:
+    merchant_pattern: str
+    card_pattern: str = ""
+
+    def matches(self, tx: BillTransaction) -> bool:
+        if re.search(self.merchant_pattern, tx.payee, re.IGNORECASE) is None:
+            return False
+        if self.card_pattern and re.search(
+            self.card_pattern, tx.metadata.get("card", ""), re.IGNORECASE
+        ) is None:
+            return False
+        return True
+
+
+@dataclass
 class Config:
     default_expense_account: str
     default_income_account: str
@@ -45,6 +60,7 @@ class Config:
     expense_rules: list[RegexRule]
     income_rules: list[RegexRule]
     merchant_alias_rules: list[MerchantAliasRule]
+    credit_card_cashback_rules: list[CreditCardCashbackRule]
     manual_review_patterns: list[str]
 
     @classmethod
@@ -82,6 +98,13 @@ class Config:
             merchant_alias_rules=[
                 MerchantAliasRule(r["pattern"], _list_value(r, "aliases", "alias"))
                 for r in data.get("merchant_alias_rules", [])
+            ],
+            credit_card_cashback_rules=[
+                CreditCardCashbackRule(
+                    r["merchant_pattern"],
+                    r.get("card_pattern", ""),
+                )
+                for r in data.get("credit_card_cashback_rules", [])
             ],
             manual_review_patterns=data.get("manual_review", {}).get("patterns", []),
         )
@@ -132,6 +155,9 @@ class Config:
 
     def same_merchant_text(self, left: str, right: str) -> bool:
         return any(rule.matches_pair(left, right) for rule in self.merchant_alias_rules)
+
+    def is_credit_card_cashback(self, tx: BillTransaction) -> bool:
+        return any(rule.matches(tx) for rule in self.credit_card_cashback_rules)
 
 
 def _list_value(data: dict, list_key: str, scalar_key: str) -> list[str]:

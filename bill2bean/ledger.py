@@ -23,6 +23,8 @@ REVIEW_FIELDS = [
     "direction",
     "amount",
     "currency",
+    "original_amount",
+    "original_currency",
     "review_reason",
     "payee",
     "narration",
@@ -54,6 +56,8 @@ class ReviewRow:
     direction: str = ""
     amount: str = ""
     currency: str = ""
+    original_amount: str = ""
+    original_currency: str = ""
     review_reason: str = ""
     payee: str = ""
     narration: str = ""
@@ -88,6 +92,8 @@ class ReviewRow:
             direction=tx.direction.value,
             amount=str(tx.amount),
             currency=tx.currency,
+            original_amount=tx.metadata.get("original_amount", ""),
+            original_currency=tx.metadata.get("original_currency", ""),
             review_reason=str(tx.review_reason),
             payee=tx.payee,
             narration=tx.narration,
@@ -168,7 +174,11 @@ class TransactionList:
                     continue
                 tx.income_account = (
                     self.config.cashback_income_account
-                    if tx.metadata.get("txn_type") == "刷卡金"
+                    if (
+                        tx.action == "merge_cashback"
+                        or tx.metadata.get("txn_type") == "刷卡金"
+                        or tx.metadata.get("is_credit_card_cashback") == "true"
+                    )
                     else self.config.income_account_for(tx)
                 )
                 if tx.is_credit_card_repayment_credit():

@@ -14,6 +14,8 @@ class Posting:
     account: str
     amount: Decimal
     currency: str
+    total_price_amount: Decimal | None = None
+    total_price_currency: str = ""
 
 
 @dataclass(frozen=True)
@@ -180,7 +182,7 @@ def _build_transaction_draft(
     if action in {"skip", "merge_cashback"} or action not in {"post", "receivable", "transfer"}:
         return None
 
-    amount = Decimal(row["amount"])
+    amount = _decimal(row["amount"])
     currency = row.get("currency") or "CNY"
     postings: list[Posting] = []
     metadata: list[tuple[str, str]] = []
@@ -202,7 +204,7 @@ def _build_transaction_draft(
     direction = row.get("direction")
     if direction == "expense":
         if action == "receivable":
-            aa_amount = Decimal(row.get("aa_amount") or "0")
+            aa_amount = _decimal(row.get("aa_amount") or "0")
             reimbursable_amount = amount - aa_amount
             if reimbursable_amount:
                 postings.append(Posting(row["receivable_account"], reimbursable_amount, currency))
@@ -211,9 +213,9 @@ def _build_transaction_draft(
             postings.append(Posting(row["source_account"], -amount, currency))
             return _draft(row, metadata, postings)
         source_amount = amount
-        discount_amount = Decimal(row.get("discount_amount") or "0")
+        discount_amount = _decimal(row.get("discount_amount") or "0")
         gross_amount = amount + discount_amount if amount >= 0 else amount - discount_amount
-        aa_amount = Decimal(row.get("aa_amount") or "0")
+        aa_amount = _decimal(row.get("aa_amount") or "0")
         share_amount = _share_receivable_amount(row, amount - aa_amount)
         personal_amount = gross_amount - aa_amount - share_amount
         if aa_amount or share_amount:
@@ -224,13 +226,13 @@ def _build_transaction_draft(
             if share_amount:
                 postings.append(Posting(row["share_account"], share_amount, currency))
         else:
-            postings.append(Posting(row["expense_account"], gross_amount, currency))
+            postings.append(_expense_posting(row, row["expense_account"], gross_amount, currency))
         if discount_amount:
             postings.append(
                 Posting(row.get("discount_account") or "Income:Other", -discount_amount, currency)
             )
         for cashback in cashbacks:
-            cb_amount = Decimal(cashback["amount"])
+            cb_amount = _decimal(cashback["amount"])
             source_amount -= cb_amount
             income_account = cashback.get("income_account") or "Income:Cashback"
             income_amount = -cb_amount
@@ -242,7 +244,7 @@ def _build_transaction_draft(
     elif direction == "transfer":
         if not row.get("expense_account"):
             return None
-        discount_amount = Decimal(row.get("discount_amount") or "0")
+        discount_amount = _decimal(row.get("discount_amount") or "0")
         target_amount = amount + discount_amount
         postings.append(Posting(row["expense_account"], target_amount, currency))
         if discount_amount:
@@ -278,9 +280,10 @@ def _format_transaction(draft: TransactionDraft) -> str:
     for key, value in draft.metadata:
         lines.append(f"  {key}: {_quote(value)}")
     for posting in draft.postings:
-        lines.append(
-            f"  {posting.account}  {posting.amount:.2f} {posting.currency}"
-        )
+        line = f"  {posting.account}  {posting.amount:.2f} {posting.currency}"
+        if posting.total_price_amount is not None and posting.total_price_currency:
+            line += f" @@ {posting.total_price_amount:.2f} {posting.total_price_currency}"
+        lines.append(line)
     return "\n".join(lines) + "\n"
 
 
@@ -319,5 +322,31 @@ def _share_receivable_amount(row: ReviewRow, share_base: Decimal) -> Decimal:
     if share == "whole":
         return share_base
     if share == "custom" and row.get("share_amount"):
-        return Decimal(row["share_amount"])
+        return _decimal(row["share_amount"])
     return Decimal("0")
+
+
+def _expense_posting(
+    row: ReviewRow,
+    account: str,
+    amount: Decimal,
+    currency: str,
+) -> Posting:
+    original_amount = row.get("original_amount")
+    original_currency = row.get("original_currency")
+    if original_amount and original_currency and original_currency != currency:
+        converted_amount = _decimal(original_amount)
+        if amount < 0 < converted_amount:
+            converted_amount = -converted_amount
+        return Posting(
+            account,
+            converted_amount,
+            original_currency,
+            amount,
+            currency,
+        )
+    return Posting(account, amount, currency)
+
+
+def _decimal(value: str) -> Decimal:
+    return Decimal((value or "0").replace(",", ""))

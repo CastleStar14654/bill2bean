@@ -56,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
         config = Config.load(args.config)
         txs = []
         for filename in args.files:
-            txs.extend(parser_for(filename).parse(filename))
+            txs.extend(parser_for(filename, config).parse(filename))
         previous_rows = read_review_csv(args.previous_review) if args.previous_review else None
         TransactionList(txs, config).normalize().write_review_csv(args.output, previous_rows)
         print(f"wrote {args.output} with {len(txs)} rows")
