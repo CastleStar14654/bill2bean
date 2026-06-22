@@ -6,7 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 import re
 
-from .ledger import read_review_csv
+from .ledger import ReviewRow, read_review_csv
 
 
 @dataclass(frozen=True)
@@ -60,18 +60,18 @@ def export_beancount(
 
 
 def filter_review_rows(
-    rows: list[dict[str, str]],
+    rows: list[ReviewRow],
     include_sources: set[str] | None = None,
     exclude_sources: set[str] | None = None,
     start_date: str = "",
     end_date: str = "",
-) -> list[dict[str, str]]:
+) -> list[ReviewRow]:
     _validate_date_range(start_date, end_date)
     include_sources = include_sources or set()
     exclude_sources = exclude_sources or set()
-    filtered: list[dict[str, str]] = []
+    filtered: list[ReviewRow] = []
     for row in rows:
-        source = row.get("source", "")
+        source = row.source
         if include_sources and source not in include_sources:
             continue
         if exclude_sources and source in exclude_sources:
@@ -103,33 +103,27 @@ def _parse_filter_date(value: str, option: str) -> date | None:
         raise ValueError(f"{option} is not a valid date") from exc
 
 
-def cashback_mapping(rows: list[dict[str, str]]) -> dict[str, list[dict[str, str]]]:
+def cashback_mapping(rows: list[ReviewRow]) -> dict[str, list[ReviewRow]]:
     duplicate_redirects = _duplicate_parent_redirects(rows)
-    cashbacks: dict[str, list[dict[str, str]]] = {}
+    cashbacks: dict[str, list[ReviewRow]] = {}
     for row in rows:
-        if row.get("action") != "merge_cashback":
+        if row.action != "merge_cashback":
             continue
-        for reason in row.get("review_reason", "").split(";"):
-            if reason.startswith("cashback_for:"):
-                parent_uid = reason.removeprefix("cashback_for:")
-                parent_uid = _redirect_parent_uid(parent_uid, duplicate_redirects)
-                cashbacks.setdefault(parent_uid, []).append(row)
+        parent_uid = row.reasons.cashback_parent_uid()
+        if parent_uid:
+            parent_uid = _redirect_parent_uid(parent_uid, duplicate_redirects)
+            cashbacks.setdefault(parent_uid, []).append(row)
     return cashbacks
 
 
-def _duplicate_parent_redirects(rows: list[dict[str, str]]) -> dict[str, str]:
+def _duplicate_parent_redirects(rows: list[ReviewRow]) -> dict[str, str]:
     redirects: dict[str, str] = {}
     for row in rows:
-        uid = row.get("uid", "")
-        if not uid:
+        if not row.uid:
             continue
-        for reason in row.get("review_reason", "").split(";"):
-            if reason.startswith("duplicate_of:"):
-                redirects[uid] = reason.removeprefix("duplicate_of:")
-                break
-            if reason.startswith("duplicate_family_card:"):
-                redirects[uid] = reason.removeprefix("duplicate_family_card:")
-                break
+        parent_uid = row.duplicate_parent_uid()
+        if parent_uid:
+            redirects[row.uid] = parent_uid
     return redirects
 
 
@@ -142,7 +136,7 @@ def _redirect_parent_uid(parent_uid: str, redirects: dict[str, str]) -> str:
 
 
 def required_accounts_for_export(
-    rows: list[dict[str, str]],
+    rows: list[ReviewRow],
     include_sources: set[str] | None = None,
     exclude_sources: set[str] | None = None,
     start_date: str = "",
@@ -179,10 +173,10 @@ def _format_header(include_accounts: str, operating_currency: str) -> list[str]:
 
 
 def _build_transaction_draft(
-    row: dict[str, str],
-    cashbacks: list[dict[str, str]],
+    row: ReviewRow,
+    cashbacks: list[ReviewRow],
 ) -> TransactionDraft | None:
-    action = (row.get("action") or "post").strip()
+    action = (row.action or "post").strip()
     if action in {"skip", "merge_cashback"} or action not in {"post", "receivable", "transfer"}:
         return None
 
@@ -262,7 +256,7 @@ def _build_transaction_draft(
 
 
 def _draft(
-    row: dict[str, str],
+    row: ReviewRow,
     metadata: list[tuple[str, str]],
     postings: list[Posting],
 ) -> TransactionDraft:
@@ -299,13 +293,10 @@ def _escape_directive_value(value: str) -> str:
 
 
 def _posting_date(row: dict[str, str]) -> str:
-    time_value = row.get("time", "")
-    if len(time_value) >= 10:
-        return time_value[:10]
-    raise ValueError(f"cannot infer posting date for row {row.get('uid', '')}")
+    return row.posting_date
 
 
-def _tags_links(row: dict[str, str]) -> str:
+def _tags_links(row: ReviewRow) -> str:
     tags = [_prefixed_token(token, "#") for token in _split_tokens(row.get("tags", ""))]
     links = [_prefixed_token(token, "^") for token in _split_tokens(row.get("links", ""))]
     return " ".join(tags + links)
@@ -321,7 +312,7 @@ def _prefixed_token(value: str, prefix: str) -> str:
     return prefix + value
 
 
-def _share_receivable_amount(row: dict[str, str], share_base: Decimal) -> Decimal:
+def _share_receivable_amount(row: ReviewRow, share_base: Decimal) -> Decimal:
     share = (row.get("share") or "").strip().lower()
     if share == "split":
         return (share_base / Decimal("2")).quantize(Decimal("0.01"))

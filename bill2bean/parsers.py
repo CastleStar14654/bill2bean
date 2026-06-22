@@ -13,7 +13,7 @@ import re
 import zipfile
 from xml.etree import ElementTree as ET
 
-from .model import BillTransaction, Direction, ReviewLevel
+from .model import BillTransaction, Direction, ReviewLevel, ReviewReasons
 
 
 class BillParser(ABC):
@@ -204,7 +204,7 @@ class IcbcEmailParser(BillParser):
                 if "退款" in tx.payee:
                     tx.amount = -tx.amount
                     tx.direction = Direction.INCOME
-                tx.review_reason = f"cashback_for:{previous_postable.uid}"
+                tx.review_reason = ReviewReasons.parse(f"cashback_for:{previous_postable.uid}")
                 previous_postable.metadata.setdefault("cashbacks", []).append(
                     {"amount": str(tx.amount), "payee": tx.payee}
                 )

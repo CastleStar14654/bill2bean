@@ -22,6 +22,60 @@ class ReviewLevel(str, Enum):
 
 
 @dataclass
+class ReviewReasons:
+    items: list[str] = field(default_factory=list)
+
+    @classmethod
+    def parse(cls, value: str | "ReviewReasons") -> "ReviewReasons":
+        if isinstance(value, ReviewReasons):
+            return cls(list(value.items))
+        return cls([part for part in value.split(";") if part])
+
+    def __bool__(self) -> bool:
+        return bool(self.items)
+
+    def __str__(self) -> str:
+        return ";".join(self.items)
+
+    def has(self, reason: str) -> bool:
+        return reason in self.items
+
+    def add(self, reason: str) -> "ReviewReasons":
+        if reason not in self.items:
+            self.items.append(reason)
+        return self
+
+    def remove(self, reason: str) -> "ReviewReasons":
+        self.items = [part for part in self.items if part != reason]
+        return self
+
+    def replace(self, old: str, new: str) -> "ReviewReasons":
+        self.items = [new if part == old else part for part in self.items]
+        if new not in self.items:
+            self.items.append(new)
+        return self
+
+    def value_after_prefix(self, prefixes: tuple[str, ...]) -> str:
+        for reason in self.items:
+            for prefix in prefixes:
+                if reason.startswith(prefix):
+                    return reason.removeprefix(prefix)
+        return ""
+
+    def duplicate_parent_uid(self) -> str:
+        return self.value_after_prefix(
+            (
+                "duplicate_of:",
+                "duplicate_family_card:",
+                "duplicate_credit_card_repayment:",
+            )
+        )
+
+    def cashback_parent_uid(self) -> str:
+        return self.value_after_prefix(("cashback_for:",))
+
+
+@dataclass
 class BillTransaction:
     source: str
     source_id: str
@@ -37,7 +91,7 @@ class BillTransaction:
     receivable_account: str = ""
     action: str = "post"
     review_level: ReviewLevel = ReviewLevel.OK
-    review_reason: str = ""
+    review_reason: ReviewReasons = field(default_factory=ReviewReasons)
     tags: str = ""
     links: str = ""
     notes: str = ""
@@ -49,6 +103,10 @@ class BillTransaction:
     discount_account: str = ""
     discount_amount: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if isinstance(self.review_reason, str):
+            self.review_reason = ReviewReasons.parse(self.review_reason)
 
     @property
     def date(self) -> str:

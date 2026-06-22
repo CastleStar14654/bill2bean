@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import csv
+from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 import re
 
 from .config import Config
-from .model import BillTransaction, Direction, ReviewLevel
+from .model import BillTransaction, Direction, ReviewLevel, ReviewReasons
 
 
 REVIEW_FIELDS = [
@@ -39,6 +40,109 @@ REVIEW_FIELDS = [
 ]
 
 
+@dataclass
+class ReviewRow:
+    uid: str = ""
+    action: str = ""
+    review_level: str = ""
+    aa_amount: str = ""
+    share: str = ""
+    share_amount: str = ""
+    discount_amount: str = ""
+    time: str = ""
+    source: str = ""
+    direction: str = ""
+    amount: str = ""
+    currency: str = ""
+    review_reason: str = ""
+    payee: str = ""
+    narration: str = ""
+    source_account: str = ""
+    expense_account: str = ""
+    income_account: str = ""
+    receivable_account: str = ""
+    aa_account: str = ""
+    share_account: str = ""
+    discount_account: str = ""
+    notes: str = ""
+    tags: str = ""
+    links: str = ""
+    source_id: str = ""
+
+    @classmethod
+    def from_dict(cls, row: dict[str, str]) -> "ReviewRow":
+        return cls(**{field: row.get(field, "") for field in REVIEW_FIELDS})
+
+    @classmethod
+    def from_transaction(cls, tx: BillTransaction) -> "ReviewRow":
+        return cls(
+            uid=tx.uid,
+            action=tx.action,
+            review_level=tx.review_level.value,
+            aa_amount=tx.aa_amount,
+            share=tx.share,
+            share_amount=tx.share_amount,
+            discount_amount=tx.discount_amount,
+            time=tx.time.isoformat(sep=" "),
+            source=tx.source,
+            direction=tx.direction.value,
+            amount=str(tx.amount),
+            currency=tx.currency,
+            review_reason=str(tx.review_reason),
+            payee=tx.payee,
+            narration=tx.narration,
+            source_account=tx.source_account_hint,
+            expense_account=tx.expense_account,
+            income_account=tx.income_account,
+            receivable_account=tx.receivable_account,
+            aa_account=tx.aa_account,
+            share_account=tx.share_account,
+            discount_account=tx.discount_account,
+            notes=tx.notes,
+            tags=tx.tags,
+            links=tx.links,
+            source_id=tx.source_id,
+        )
+
+    def to_dict(self) -> dict[str, str]:
+        return {field: getattr(self, field) for field in REVIEW_FIELDS}
+
+    def get(self, key: str, default: str = "") -> str:
+        return getattr(self, key, default)
+
+    def __getitem__(self, key: str) -> str:
+        return getattr(self, key)
+
+    def __setitem__(self, key: str, value: str) -> None:
+        setattr(self, key, value)
+
+    @property
+    def reasons(self) -> ReviewReasons:
+        return ReviewReasons.parse(self.review_reason)
+
+    @property
+    def posting_date(self) -> str:
+        if len(self.time) >= 10:
+            return self.time[:10]
+        raise ValueError(f"cannot infer posting date for row {self.uid}")
+
+    def duplicate_parent_uid(self) -> str:
+        return self.reasons.duplicate_parent_uid()
+
+    def is_post_manual(self) -> bool:
+        return self.action == "post" and self.review_level == ReviewLevel.MANUAL.value
+
+    def is_skip_ok(self) -> bool:
+        return self.action == "skip" and self.review_level == ReviewLevel.OK.value
+
+    def is_skip_check_duplicate(self) -> bool:
+        return (
+            self.action == "skip"
+            and self.review_level == ReviewLevel.CHECK.value
+            and bool(self.duplicate_parent_uid())
+        )
+
+
 class TransactionList:
     def __init__(self, txs: list[BillTransaction], config: Config):
         self.txs = txs
@@ -53,13 +157,13 @@ class TransactionList:
                 if self._is_family_card(tx):
                     tx.share = tx.share or "whole"
                     tx.share_account = tx.share_account or self.config.family_card_receivable_account
-                    tx.review_reason = append_reason(tx.review_reason, "family_card_receivable")
+                    tx.review_reason.add("family_card_receivable")
             elif tx.direction == Direction.INCOME:
                 if self._is_refund(tx):
                     tx.direction = Direction.EXPENSE
                     tx.amount = -tx.amount
                     tx.expense_account = self.config.expense_account_for(tx)
-                    tx.review_reason = append_reason(tx.review_reason, "refund_as_negative_expense")
+                    tx.review_reason.add("refund_as_negative_expense")
                     continue
                 tx.income_account = (
                     self.config.cashback_income_account
@@ -70,32 +174,28 @@ class TransactionList:
                     tx.action = "post"
                     tx.income_account = self.config.manual_income_account
                     tx.review_level = ReviewLevel.MANUAL
-                    tx.review_reason = append_reason(
-                        tx.review_reason, "unmatched_credit_card_repayment"
-                    )
+                    tx.review_reason.add("unmatched_credit_card_repayment")
             elif self._is_payment_platform_credit_card_repayment(tx):
                 tx.direction = Direction.TRANSFER
                 tx.action = "transfer"
                 tx.expense_account = ""
                 tx.review_level = ReviewLevel.MANUAL
                 self._apply_discount_metadata(tx)
-                tx.review_reason = append_reason(
-                    tx.review_reason, "unmatched_credit_card_repayment_transfer"
-                )
+                tx.review_reason.add("unmatched_credit_card_repayment_transfer")
             elif self._is_alipay_yuebao_transfer(tx):
                 tx.direction = Direction.TRANSFER
                 tx.action = "transfer"
                 tx.review_level = ReviewLevel.CHECK
                 tx.source_account_hint = self._alipay_payment_method_account(tx)
                 tx.expense_account = "Assets:Current:Alipay:YuEBao"
-                tx.review_reason = append_reason(tx.review_reason, "yuebao_transfer")
+                tx.review_reason.add("yuebao_transfer")
             elif self._is_alipay_credit_repayment(tx):
                 tx.direction = Direction.TRANSFER
                 tx.action = "transfer"
                 tx.review_level = ReviewLevel.CHECK
                 tx.source_account_hint = self._alipay_payment_method_account(tx)
                 tx.expense_account = self._alipay_credit_repayment_account(tx)
-                tx.review_reason = append_reason(tx.review_reason, "credit_repayment")
+                tx.review_reason.add("credit_repayment")
             tx.aa_account = tx.aa_account or self.config.aa_account
             tx.receivable_account = tx.receivable_account or self.config.receivable_account
             tx.share_account = tx.share_account or self.config.family_card_receivable_account
@@ -112,24 +212,25 @@ class TransactionList:
                         if self._is_alipay_safe_investment_neutral(tx)
                         else ReviewLevel.CHECK
                     )
-                tx.review_reason = tx.review_reason or "neutral_transaction"
+                if not tx.review_reason:
+                    tx.review_reason.add("neutral_transaction")
             if not tx.source_account_hint or tx.source_account_hint == "Assets:Unknown":
                 self._mark_manual(tx, "unknown_source_account")
             if tx.direction == Direction.EXPENSE and tx.expense_account == self.config.default_expense_account:
                 tx.review_level = max_review(tx.review_level, ReviewLevel.CHECK)
-                tx.review_reason = append_reason(tx.review_reason, "default_expense_account")
+                tx.review_reason.add("default_expense_account")
         CrossSourceMatcher(self.txs, self.config).deduplicate()
         self._force_manual_post()
         return self
 
     def _mark_manual(self, tx: BillTransaction, reason: str) -> None:
         tx.review_level = ReviewLevel.MANUAL
-        tx.review_reason = append_reason(tx.review_reason, reason)
+        tx.review_reason.add(reason)
 
     def _normalize_receivable_action(self, tx: BillTransaction) -> None:
         if tx.share or tx.share_amount:
             tx.review_level = ReviewLevel.MANUAL
-            tx.review_reason = append_reason(tx.review_reason, "receivable_overrides_share")
+            tx.review_reason.add("receivable_overrides_share")
             tx.share = ""
             tx.share_amount = ""
 
@@ -138,7 +239,7 @@ class TransactionList:
             if tx.review_level != ReviewLevel.MANUAL or tx.action != "skip":
                 continue
             tx.action = "post"
-            tx.review_reason = append_reason(tx.review_reason, "forced_manual_post")
+            tx.review_reason.add("forced_manual_post")
             if tx.direction == Direction.INCOME:
                 tx.income_account = self.config.manual_income_account
             elif tx.direction == Direction.EXPENSE:
@@ -156,12 +257,10 @@ class TransactionList:
         tx.discount_account = tx.discount_account or self.config.discount_income_account
         if tx.metadata.get("discount_amount"):
             tx.discount_amount = str(tx.metadata["discount_amount"])
-            tx.review_reason = append_reason(tx.review_reason, "payment_discount")
+            tx.review_reason.add("payment_discount")
         elif tx.source == "alipay" and "&" in tx.metadata.get("收/付款方式", ""):
             tx.review_level = ReviewLevel.MANUAL
-            tx.review_reason = append_reason(
-                tx.review_reason, "payment_discount_amount_unknown"
-            )
+            tx.review_reason.add("payment_discount_amount_unknown")
 
     def _is_payment_platform_credit_card_repayment(self, tx: BillTransaction) -> bool:
         return is_payment_platform_credit_card_repayment(tx)
@@ -220,16 +319,16 @@ class TransactionList:
     def write_review_csv(
         self,
         path: str | Path,
-        previous_rows: list[dict[str, str]] | None = None,
+        previous_rows: list[ReviewRow] | None = None,
     ) -> None:
-        rows = [review_row(tx) for tx in self.txs]
+        rows = [ReviewRow.from_transaction(tx) for tx in self.txs]
         if previous_rows:
             rows = merge_previous_review_rows(rows, previous_rows)
         with Path(path).open("w", encoding="utf-8-sig", newline="") as fh:
             writer = csv.DictWriter(fh, fieldnames=REVIEW_FIELDS)
             writer.writeheader()
             for row in review_row_order(rows):
-                writer.writerow(row)
+                writer.writerow(row.to_dict())
 
 
 class CrossSourceMatcher:
@@ -253,7 +352,7 @@ class CrossSourceMatcher:
                 continue
             if tx.direction != Direction.EXPENSE and not is_credit_card_repayment_credit(tx):
                 continue
-            if has_reason(tx.review_reason, "unionpay_via_tenpay_missing_from_wechat"):
+            if tx.review_reason.has("unionpay_via_tenpay_missing_from_wechat"):
                 continue
             candidates = detailed.get(tx.same_money_day_key(), [])
             merchant = tx.payee.replace("财付通-", "").replace("支付宝-", "")
@@ -265,15 +364,16 @@ class CrossSourceMatcher:
                 ):
                     candidate.expense_account = tx.source_account_hint
                     candidate.review_level = ReviewLevel.OK
-                    candidate.review_reason = replace_reason(
-                        candidate.review_reason,
+                    candidate.review_reason.replace(
                         "unmatched_credit_card_repayment_transfer",
                         "credit_card_repayment",
                     )
                     tx.action = "skip"
                     tx.income_account = ""
                     tx.review_level = ReviewLevel.CHECK
-                    tx.review_reason = "duplicate_credit_card_repayment:" + candidate.uid
+                    tx.review_reason = ReviewReasons.parse(
+                        "duplicate_credit_card_repayment:" + candidate.uid
+                    )
                     self.used_repayment_transfer_uids.add(candidate.uid)
                     break
             if tx.action == "skip":
@@ -300,9 +400,7 @@ class CrossSourceMatcher:
                 continue
             if len(expense_candidates) > 1:
                 tx.review_level = max_review(tx.review_level, ReviewLevel.CHECK)
-                tx.review_reason = append_reason(
-                    tx.review_reason, "ambiguous_same_amount_duplicate"
-                )
+                tx.review_reason.add("ambiguous_same_amount_duplicate")
         for tx in self.txs:
             if (
                 is_payment_platform_credit_card_repayment(tx)
@@ -358,17 +456,11 @@ class CrossSourceMatcher:
             self._enrich_family_card(candidate, credit_tx)
             candidate.expense_account = self.config.expense_account_for(candidate)
             if candidate.expense_account != self.config.default_expense_account:
-                candidate.review_reason = remove_reason(
-                    candidate.review_reason, "default_expense_account"
-                )
-            credit_tx.review_reason = append_reason(
-                credit_tx.review_reason, f"duplicate_family_card:{candidate.uid}"
-            )
+                candidate.review_reason.remove("default_expense_account")
+            credit_tx.review_reason.add(f"duplicate_family_card:{candidate.uid}")
             self.used_family_card_uids.add(candidate.uid)
         else:
-            credit_tx.review_reason = append_reason(
-                credit_tx.review_reason, f"duplicate_of:{candidate.uid}"
-            )
+            credit_tx.review_reason.add(f"duplicate_of:{candidate.uid}")
         self.used_platform_expense_uids.add(candidate.uid)
 
     def _matches_credit_card_merchant(
@@ -395,32 +487,7 @@ class CrossSourceMatcher:
             family_tx.narration = credit_tx.payee
         family_tx.metadata["matched_credit_payee"] = credit_tx.payee
         family_tx.metadata["matched_credit_type"] = credit_tx.narration
-        family_tx.review_reason = append_reason(
-            family_tx.review_reason, "enriched_from_credit_card"
-        )
-
-
-def append_reason(current: str, reason: str) -> str:
-    if not current:
-        return reason
-    if reason in current.split(";"):
-        return current
-    return f"{current};{reason}"
-
-
-def has_reason(current: str, reason: str) -> bool:
-    return reason in current.split(";")
-
-
-def remove_reason(current: str, reason: str) -> str:
-    return ";".join(part for part in current.split(";") if part and part != reason)
-
-
-def replace_reason(current: str, old: str, new: str) -> str:
-    parts = [new if part == old else part for part in current.split(";") if part]
-    if new not in parts:
-        parts.append(new)
-    return ";".join(parts)
+        family_tx.review_reason.add("enriched_from_credit_card")
 
 
 def max_review(a: ReviewLevel, b: ReviewLevel) -> ReviewLevel:
@@ -448,63 +515,62 @@ def is_credit_card_repayment_credit(tx: BillTransaction) -> bool:
 
 
 def merge_previous_review_rows(
-    rows: list[dict[str, str]],
-    previous_rows: list[dict[str, str]],
-) -> list[dict[str, str]]:
+    rows: list[ReviewRow],
+    previous_rows: list[ReviewRow],
+) -> list[ReviewRow]:
     previous_by_uid = {
-        row["uid"]: row
+        row.uid: row
         for row in previous_rows
-        if row.get("uid")
+        if row.uid
     }
-    merged_rows: list[dict[str, str]] = []
+    merged_rows: list[ReviewRow] = []
     for row in rows:
-        previous = previous_by_uid.get(row.get("uid", ""))
+        previous = previous_by_uid.get(row.uid)
         if not previous:
             merged_rows.append(row)
             continue
-        merged = row.copy()
+        merged = ReviewRow.from_dict(row.to_dict())
         for field in REVIEW_FIELDS:
-            if field in previous:
-                merged[field] = previous.get(field, "")
-        merged["uid"] = row["uid"]
+            setattr(merged, field, getattr(previous, field))
+        merged.uid = row.uid
         merged_rows.append(merged)
     return merged_rows
 
 
-def review_row_order(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+def review_row_order(rows: list[ReviewRow]) -> list[ReviewRow]:
     ordered = sorted(
         rows,
-        key=lambda r: (r.get("time", ""), r.get("source", ""), r.get("uid", "")),
+        key=lambda r: (r.time, r.source, r.uid),
     )
-    by_uid = {row.get("uid", ""): row for row in ordered if row.get("uid")}
-    duplicate_children: dict[str, list[dict[str, str]]] = {}
+    by_uid = {row.uid: row for row in ordered if row.uid}
+    duplicate_children: dict[str, list[ReviewRow]] = {}
     duplicate_uids: set[str] = set()
     for row in ordered:
-        if not is_skip_check_duplicate(row):
+        if not row.is_skip_check_duplicate():
             continue
-        parent_uid = duplicate_parent_uid(row.get("review_reason", ""))
+        parent_uid = row.duplicate_parent_uid()
         if parent_uid and parent_uid in by_uid:
             duplicate_children.setdefault(parent_uid, []).append(row)
-            duplicate_uids.add(row.get("uid", ""))
+            duplicate_uids.add(row.uid)
 
     post_manual = [
         row
         for row in ordered
-        if is_post_manual(row) and row.get("uid", "") not in duplicate_uids
+        if row.is_post_manual() and row.uid not in duplicate_uids
     ]
     initial = [
         row
         for row in ordered
-        if not is_post_manual(row)
-        and not is_skip_ok(row)
-        and row.get("uid", "") not in duplicate_uids
+        if not row.is_post_manual()
+        and not row.is_skip_ok()
+        and row.uid not in duplicate_uids
     ]
-    skip_ok = [row for row in ordered if is_skip_ok(row)]
-    result: list[dict[str, str]] = []
+    skip_ok = [row for row in ordered if row.is_skip_ok()]
+    result: list[ReviewRow] = []
     emitted: set[str] = set()
 
-    def emit(row: dict[str, str]) -> None:
-        uid = row.get("uid", "")
+    def emit(row: ReviewRow) -> None:
+        uid = row.uid
         if uid in emitted:
             return
         emitted.add(uid)
@@ -521,64 +587,9 @@ def review_row_order(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     return result
 
 
-def is_post_manual(row: dict[str, str]) -> bool:
-    return row.get("action") == "post" and row.get("review_level") == ReviewLevel.MANUAL.value
-
-
-def is_skip_ok(row: dict[str, str]) -> bool:
-    return row.get("action") == "skip" and row.get("review_level") == ReviewLevel.OK.value
-
-
-def is_skip_check_duplicate(row: dict[str, str]) -> bool:
-    return (
-        row.get("action") == "skip"
-        and row.get("review_level") == ReviewLevel.CHECK.value
-        and bool(duplicate_parent_uid(row.get("review_reason", "")))
-    )
-
-
-def duplicate_parent_uid(review_reason: str) -> str:
-    for reason in review_reason.split(";"):
-        if "duplicate" not in reason or ":" not in reason:
-            continue
-        return reason.split(":", 1)[1]
-    return ""
-
-
-def review_row(tx: BillTransaction) -> dict[str, str]:
-    return {
-        "uid": tx.uid,
-        "action": tx.action,
-        "review_level": tx.review_level.value,
-        "aa_amount": tx.aa_amount,
-        "share": tx.share,
-        "share_amount": tx.share_amount,
-        "discount_amount": tx.discount_amount,
-        "time": tx.time.isoformat(sep=" "),
-        "source": tx.source,
-        "direction": tx.direction.value,
-        "amount": str(tx.amount),
-        "currency": tx.currency,
-        "review_reason": tx.review_reason,
-        "payee": tx.payee,
-        "narration": tx.narration,
-        "source_account": tx.source_account_hint,
-        "expense_account": tx.expense_account,
-        "income_account": tx.income_account,
-        "receivable_account": tx.receivable_account,
-        "aa_account": tx.aa_account,
-        "share_account": tx.share_account,
-        "discount_account": tx.discount_account,
-        "notes": tx.notes,
-        "tags": tx.tags,
-        "links": tx.links,
-        "source_id": tx.source_id,
-    }
-
-
-def read_review_csv(path: str | Path) -> list[dict[str, str]]:
+def read_review_csv(path: str | Path) -> list[ReviewRow]:
     with Path(path).open("r", encoding="utf-8-sig", newline="") as fh:
-        return list(csv.DictReader(fh))
+        return [ReviewRow.from_dict(row) for row in csv.DictReader(fh)]
 
 
 def extract_accounts(path: str | Path) -> set[str]:
