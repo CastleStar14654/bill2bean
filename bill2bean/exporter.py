@@ -1,11 +1,29 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 import re
 
 from .ledger import read_review_csv
+
+
+@dataclass(frozen=True)
+class Posting:
+    account: str
+    amount: Decimal
+    currency: str
+
+
+@dataclass(frozen=True)
+class TransactionDraft:
+    date: str
+    payee: str
+    narration: str
+    metadata: list[tuple[str, str]]
+    postings: list[Posting]
+    tags_links: str = ""
 
 
 def export_beancount(
@@ -30,12 +48,10 @@ def export_beancount(
 
     chunks: list[str] = []
     for row in rows:
-        action = (row.get("action") or "post").strip()
-        if action in {"skip", "merge_cashback"}:
+        draft = _build_transaction_draft(row, cashback_by_parent.get(row["uid"], []))
+        if not draft:
             continue
-        if action not in {"post", "receivable", "transfer"}:
-            continue
-        chunk = _format_transaction(row, cashback_by_parent.get(row["uid"], []))
+        chunk = _format_transaction(draft)
         if chunk:
             chunks.append(chunk)
     parts = _format_header(include_accounts, operating_currency)
@@ -142,7 +158,10 @@ def required_accounts_for_export(
     )
     accounts: set[str] = set()
     for row in filtered:
-        accounts.update(_posting_accounts(row, cashback_by_parent.get(row["uid"], [])))
+        draft = _build_transaction_draft(row, cashback_by_parent.get(row["uid"], []))
+        if not draft:
+            continue
+        accounts.update(posting.account for posting in draft.postings if posting.account)
     return accounts
 
 
@@ -159,29 +178,32 @@ def _format_header(include_accounts: str, operating_currency: str) -> list[str]:
     return lines
 
 
-def _format_transaction(row: dict[str, str], cashbacks: list[dict[str, str]]) -> str:
+def _build_transaction_draft(
+    row: dict[str, str],
+    cashbacks: list[dict[str, str]],
+) -> TransactionDraft | None:
+    action = (row.get("action") or "post").strip()
+    if action in {"skip", "merge_cashback"} or action not in {"post", "receivable", "transfer"}:
+        return None
+
     amount = Decimal(row["amount"])
     currency = row.get("currency") or "CNY"
-    payee = _quote(row["payee"])
-    narration = _quote(row["narration"])
-    action = (row.get("action") or "post").strip()
-    tags_links = _tags_links(row)
-    suffix = f" {tags_links}" if tags_links else ""
-    lines = [f'{_posting_date(row)} * {payee} {narration}{suffix}']
+    postings: list[Posting] = []
+    metadata: list[tuple[str, str]] = []
     if row.get("source") or row.get("uid"):
-        lines.append(f'  source: "{row.get("source", "")}"')
-        lines.append(f'  import_id: "{row.get("uid", "")}"')
+        metadata.append(("source", row.get("source", "")))
+        metadata.append(("import_id", row.get("uid", "")))
     if row.get("notes"):
-        lines.append(f'  note: "{row["notes"]}"')
+        metadata.append(("note", row["notes"]))
     if action == "receivable":
         if row.get("share") or row.get("share_amount"):
-            lines.append('  warning: "receivable_overrides_share"')
+            metadata.append(("warning", "receivable_overrides_share"))
     elif row.get("share"):
-        lines.append(f'  share: "{row["share"]}"')
+        metadata.append(("share", row["share"]))
         if row.get("share_account"):
-            lines.append(f'  share_account: "{row["share_account"]}"')
+            metadata.append(("share_account", row["share_account"]))
         if row.get("share_amount"):
-            lines.append(f'  share_amount: "{row["share_amount"]}"')
+            metadata.append(("share_amount", row["share_amount"]))
 
     direction = row.get("direction")
     if direction == "expense":
@@ -189,11 +211,11 @@ def _format_transaction(row: dict[str, str], cashbacks: list[dict[str, str]]) ->
             aa_amount = Decimal(row.get("aa_amount") or "0")
             reimbursable_amount = amount - aa_amount
             if reimbursable_amount:
-                lines.append(f'  {row["receivable_account"]}  {reimbursable_amount:.2f} {currency}')
+                postings.append(Posting(row["receivable_account"], reimbursable_amount, currency))
             if aa_amount:
-                lines.append(f'  {row["aa_account"]}  {aa_amount:.2f} {currency}')
-            lines.append(f'  {row["source_account"]}  {-amount:.2f} {currency}')
-            return "\n".join(lines) + "\n"
+                postings.append(Posting(row["aa_account"], aa_amount, currency))
+            postings.append(Posting(row["source_account"], -amount, currency))
+            return _draft(row, metadata, postings)
         source_amount = amount
         discount_amount = Decimal(row.get("discount_amount") or "0")
         gross_amount = amount + discount_amount if amount >= 0 else amount - discount_amount
@@ -202,40 +224,69 @@ def _format_transaction(row: dict[str, str], cashbacks: list[dict[str, str]]) ->
         personal_amount = gross_amount - aa_amount - share_amount
         if aa_amount or share_amount:
             if personal_amount:
-                lines.append(f'  {row["expense_account"]}  {personal_amount:.2f} {currency}')
+                postings.append(Posting(row["expense_account"], personal_amount, currency))
             if aa_amount:
-                lines.append(f'  {row["aa_account"]}  {aa_amount:.2f} {currency}')
+                postings.append(Posting(row["aa_account"], aa_amount, currency))
             if share_amount:
-                lines.append(f'  {row["share_account"]}  {share_amount:.2f} {currency}')
+                postings.append(Posting(row["share_account"], share_amount, currency))
         else:
-            lines.append(f'  {row["expense_account"]}  {gross_amount:.2f} {currency}')
+            postings.append(Posting(row["expense_account"], gross_amount, currency))
         if discount_amount:
-            lines.append(
-                f'  {row.get("discount_account") or "Income:Other"}  {-discount_amount:.2f} {currency}'
+            postings.append(
+                Posting(row.get("discount_account") or "Income:Other", -discount_amount, currency)
             )
         for cashback in cashbacks:
             cb_amount = Decimal(cashback["amount"])
             source_amount -= cb_amount
             income_account = cashback.get("income_account") or "Income:Cashback"
             income_amount = -cb_amount
-            lines.append(f"  {income_account}  {income_amount:.2f} {currency}")
-        lines.append(f'  {row["source_account"]}  {-source_amount:.2f} {currency}')
+            postings.append(Posting(income_account, income_amount, currency))
+        postings.append(Posting(row["source_account"], -source_amount, currency))
     elif direction == "income":
-        lines.append(f'  {row["source_account"]}  {amount:.2f} {currency}')
-        lines.append(f'  {row["income_account"]}  -{amount:.2f} {currency}')
+        postings.append(Posting(row["source_account"], amount, currency))
+        postings.append(Posting(row["income_account"], -amount, currency))
     elif direction == "transfer":
         if not row.get("expense_account"):
-            return ""
+            return None
         discount_amount = Decimal(row.get("discount_amount") or "0")
         target_amount = amount + discount_amount
-        lines.append(f'  {row["expense_account"]}  {target_amount:.2f} {currency}')
+        postings.append(Posting(row["expense_account"], target_amount, currency))
         if discount_amount:
-            lines.append(
-                f'  {row.get("discount_account") or "Income:Other"}  -{discount_amount:.2f} {currency}'
+            postings.append(
+                Posting(row.get("discount_account") or "Income:Other", -discount_amount, currency)
             )
-        lines.append(f'  {row["source_account"]}  -{amount:.2f} {currency}')
+        postings.append(Posting(row["source_account"], -amount, currency))
     else:
-        lines.append(f'  {row["source_account"]}  {amount:.2f} {currency}')
+        postings.append(Posting(row["source_account"], amount, currency))
+    return _draft(row, metadata, postings)
+
+
+def _draft(
+    row: dict[str, str],
+    metadata: list[tuple[str, str]],
+    postings: list[Posting],
+) -> TransactionDraft:
+    return TransactionDraft(
+        date=_posting_date(row),
+        payee=row["payee"],
+        narration=row["narration"],
+        metadata=metadata,
+        postings=postings,
+        tags_links=_tags_links(row),
+    )
+
+
+def _format_transaction(draft: TransactionDraft) -> str:
+    payee = _quote(draft.payee)
+    narration = _quote(draft.narration)
+    suffix = f" {draft.tags_links}" if draft.tags_links else ""
+    lines = [f"{draft.date} * {payee} {narration}{suffix}"]
+    for key, value in draft.metadata:
+        lines.append(f"  {key}: {_quote(value)}")
+    for posting in draft.postings:
+        lines.append(
+            f"  {posting.account}  {posting.amount:.2f} {posting.currency}"
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -252,56 +303,6 @@ def _posting_date(row: dict[str, str]) -> str:
     if len(time_value) >= 10:
         return time_value[:10]
     raise ValueError(f"cannot infer posting date for row {row.get('uid', '')}")
-
-
-def _posting_accounts(row: dict[str, str], cashbacks: list[dict[str, str]]) -> set[str]:
-    action = (row.get("action") or "post").strip()
-    if action in {"skip", "merge_cashback"} or action not in {"post", "receivable", "transfer"}:
-        return set()
-
-    amount = Decimal(row["amount"])
-    direction = row.get("direction")
-    if direction == "expense":
-        if action == "receivable":
-            aa_amount = Decimal(row.get("aa_amount") or "0")
-            accounts = {row["source_account"]}
-            if amount - aa_amount:
-                accounts.add(row["receivable_account"])
-            if aa_amount:
-                accounts.add(row["aa_account"])
-            return {account for account in accounts if account}
-
-        accounts = {row["source_account"]}
-        aa_amount = Decimal(row.get("aa_amount") or "0")
-        discount_amount = Decimal(row.get("discount_amount") or "0")
-        share_amount = _share_receivable_amount(row, amount - aa_amount)
-        gross_amount = amount + discount_amount if amount >= 0 else amount - discount_amount
-        personal_amount = gross_amount - aa_amount - share_amount
-        if aa_amount or share_amount:
-            if personal_amount:
-                accounts.add(row["expense_account"])
-            if aa_amount:
-                accounts.add(row["aa_account"])
-            if share_amount:
-                accounts.add(row["share_account"])
-        else:
-            accounts.add(row["expense_account"])
-        if discount_amount:
-            accounts.add(row.get("discount_account") or "Income:Other")
-        for cashback in cashbacks:
-            accounts.add(cashback.get("income_account") or "Income:Cashback")
-        return {account for account in accounts if account}
-
-    if direction == "income":
-        return {account for account in {row["source_account"], row["income_account"]} if account}
-    if direction == "transfer":
-        if not row.get("expense_account"):
-            return set()
-        accounts = {row["source_account"], row["expense_account"]}
-        if Decimal(row.get("discount_amount") or "0"):
-            accounts.add(row.get("discount_account") or "Income:Other")
-        return {account for account in accounts if account}
-    return {row["source_account"]} if row.get("source_account") else set()
 
 
 def _tags_links(row: dict[str, str]) -> str:
