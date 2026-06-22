@@ -45,7 +45,6 @@ class TransactionList:
         self.config = config
 
     def normalize(self) -> "TransactionList":
-        used_family_card_uids: set[str] = set()
         for tx in self.txs:
             tx.source_account_hint = self.config.source_account_for(tx)
             if tx.direction == Direction.EXPENSE:
@@ -119,89 +118,9 @@ class TransactionList:
             if tx.direction == Direction.EXPENSE and tx.expense_account == self.config.default_expense_account:
                 tx.review_level = max_review(tx.review_level, ReviewLevel.CHECK)
                 tx.review_reason = append_reason(tx.review_reason, "default_expense_account")
-        self._deduplicate_cross_sources()
+        CrossSourceMatcher(self.txs, self.config).deduplicate()
         self._force_manual_post()
         return self
-
-    def _deduplicate_cross_sources(self) -> None:
-        detailed: dict[tuple[str, Decimal, str], list[BillTransaction]] = {}
-        for tx in self.txs:
-            if tx.source in {"wechat", "alipay"} and tx.direction == Direction.EXPENSE:
-                detailed.setdefault(tx.same_money_day_key(), []).append(tx)
-            if tx.action == "transfer":
-                detailed.setdefault(tx.same_money_day_key(), []).append(tx)
-
-        used_family_card_uids: set[str] = set()
-        used_platform_expense_uids: set[str] = set()
-        used_repayment_transfer_uids: set[str] = set()
-        for tx in self.txs:
-            if tx.source != "icbc_credit":
-                continue
-            if tx.direction != Direction.EXPENSE and not self._is_credit_card_repayment_credit(tx):
-                continue
-            if has_reason(tx.review_reason, "unionpay_via_tenpay_missing_from_wechat"):
-                continue
-            candidates = detailed.get(tx.same_money_day_key(), [])
-            merchant = tx.payee.replace("财付通-", "").replace("支付宝-", "")
-            for candidate in candidates:
-                if (
-                    self._is_credit_card_repayment_credit(tx)
-                    and candidate.action == "transfer"
-                    and candidate.uid not in used_repayment_transfer_uids
-                ):
-                    candidate.expense_account = tx.source_account_hint
-                    candidate.review_level = ReviewLevel.OK
-                    candidate.review_reason = replace_reason(
-                        candidate.review_reason,
-                        "unmatched_credit_card_repayment_transfer",
-                        "credit_card_repayment",
-                    )
-                    tx.action = "skip"
-                    tx.income_account = ""
-                    tx.review_level = ReviewLevel.CHECK
-                    tx.review_reason = "duplicate_credit_card_repayment:" + candidate.uid
-                    used_repayment_transfer_uids.add(candidate.uid)
-                    break
-            if tx.action == "skip":
-                continue
-
-            expense_candidates = [
-                candidate
-                for candidate in candidates
-                if self._is_available_platform_expense_candidate(
-                    tx,
-                    candidate,
-                    used_platform_expense_uids,
-                    used_family_card_uids,
-                )
-            ]
-            duplicate_candidate = self._select_duplicate_candidate(
-                tx,
-                expense_candidates,
-                merchant,
-            )
-            if duplicate_candidate:
-                self._mark_duplicate_match(
-                    tx,
-                    duplicate_candidate,
-                    used_platform_expense_uids,
-                    used_family_card_uids,
-                )
-                continue
-            if len(expense_candidates) > 1:
-                tx.review_level = max_review(tx.review_level, ReviewLevel.CHECK)
-                tx.review_reason = append_reason(
-                    tx.review_reason, "ambiguous_same_amount_duplicate"
-                )
-        for tx in self.txs:
-            if (
-                self._is_payment_platform_credit_card_repayment(tx)
-                and tx.action == "transfer"
-                and not tx.expense_account
-            ):
-                tx.action = "post"
-                tx.expense_account = self.config.manual_income_account
-                tx.review_level = ReviewLevel.MANUAL
 
     def _mark_manual(self, tx: BillTransaction, reason: str) -> None:
         tx.review_level = ReviewLevel.MANUAL
@@ -230,98 +149,8 @@ class TransactionList:
                 tx.direction = Direction.EXPENSE
                 tx.expense_account = self.config.manual_expense_account
 
-    def _is_available_platform_expense_candidate(
-        self,
-        credit_tx: BillTransaction,
-        candidate: BillTransaction,
-        used_platform_expense_uids: set[str],
-        used_family_card_uids: set[str],
-    ) -> bool:
-        if candidate.source not in {"wechat", "alipay"} or candidate.direction != Direction.EXPENSE:
-            return False
-        if candidate.amount != credit_tx.amount:
-            return False
-        if candidate.source_account_hint != credit_tx.source_account_hint:
-            return False
-        if candidate.uid in used_platform_expense_uids:
-            return False
-        if self._is_family_card(candidate) and candidate.uid in used_family_card_uids:
-            return False
-        return True
-
-    def _select_duplicate_candidate(
-        self,
-        credit_tx: BillTransaction,
-        candidates: list[BillTransaction],
-        merchant: str,
-    ) -> BillTransaction | None:
-        if len(candidates) == 1:
-            return candidates[0]
-        merchant_matches = [
-            candidate
-            for candidate in candidates
-            if self._matches_credit_card_merchant(credit_tx, candidate, merchant)
-        ]
-        if len(merchant_matches) == 1:
-            return merchant_matches[0]
-        return None
-
-    def _mark_duplicate_match(
-        self,
-        credit_tx: BillTransaction,
-        candidate: BillTransaction,
-        used_platform_expense_uids: set[str],
-        used_family_card_uids: set[str],
-    ) -> None:
-        credit_tx.action = "skip"
-        credit_tx.review_level = ReviewLevel.CHECK
-        if self._is_family_card(candidate):
-            self._enrich_family_card(candidate, credit_tx)
-            candidate.expense_account = self.config.expense_account_for(candidate)
-            if candidate.expense_account != self.config.default_expense_account:
-                candidate.review_reason = remove_reason(
-                    candidate.review_reason, "default_expense_account"
-                )
-            credit_tx.review_reason = append_reason(
-                credit_tx.review_reason, f"duplicate_family_card:{candidate.uid}"
-            )
-            used_family_card_uids.add(candidate.uid)
-        else:
-            credit_tx.review_reason = append_reason(
-                credit_tx.review_reason, f"duplicate_of:{candidate.uid}"
-            )
-        used_platform_expense_uids.add(candidate.uid)
-
-    def _matches_credit_card_merchant(
-        self,
-        credit_tx: BillTransaction,
-        candidate: BillTransaction,
-        merchant: str,
-    ) -> bool:
-        candidate_text = " ".join([candidate.payee, candidate.narration])
-        return (
-            bool(merchant)
-            and candidate.amount == credit_tx.amount
-            and (
-                merchant in candidate.payee
-                or merchant in candidate.narration
-                or candidate.payee in merchant
-                or self.config.same_merchant_text(merchant, candidate_text)
-            )
-        )
-
     def _is_family_card(self, tx: BillTransaction) -> bool:
-        return tx.source == "wechat" and tx.metadata.get("交易类型") == "亲属卡交易"
-
-    def _enrich_family_card(self, family_tx: BillTransaction, credit_tx: BillTransaction) -> None:
-        original = family_tx.narration.strip()
-        if not original or original == "/":
-            family_tx.narration = credit_tx.payee
-        family_tx.metadata["matched_credit_payee"] = credit_tx.payee
-        family_tx.metadata["matched_credit_type"] = credit_tx.narration
-        family_tx.review_reason = append_reason(
-            family_tx.review_reason, "enriched_from_credit_card"
-        )
+        return is_family_card(tx)
 
     def _apply_discount_metadata(self, tx: BillTransaction) -> None:
         tx.discount_account = tx.discount_account or self.config.discount_income_account
@@ -335,7 +164,7 @@ class TransactionList:
             )
 
     def _is_payment_platform_credit_card_repayment(self, tx: BillTransaction) -> bool:
-        return tx.source in {"alipay", "wechat"} and "信用卡还款" in self._text(tx)
+        return is_payment_platform_credit_card_repayment(tx)
 
     def _is_alipay_yuebao_transfer(self, tx: BillTransaction) -> bool:
         return (
@@ -376,13 +205,10 @@ class TransactionList:
         return ""
 
     def _is_credit_card_repayment_credit(self, tx: BillTransaction) -> bool:
-        return tx.source.endswith("_credit") and (
-            tx.metadata.get("txn_type") == "信用卡还款"
-            or tx.metadata.get("is_credit_card_repayment") == "true"
-        )
+        return is_credit_card_repayment_credit(tx)
 
     def _text(self, tx: BillTransaction) -> str:
-        return " ".join([tx.payee, tx.narration, str(tx.metadata)])
+        return transaction_text(tx)
 
     def _is_refund(self, tx: BillTransaction) -> bool:
         if tx.source == "icbc_credit" and tx.metadata.get("txn_type") == "退款":
@@ -404,6 +230,174 @@ class TransactionList:
             writer.writeheader()
             for row in review_row_order(rows):
                 writer.writerow(row)
+
+
+class CrossSourceMatcher:
+    def __init__(self, txs: list[BillTransaction], config: Config):
+        self.txs = txs
+        self.config = config
+        self.used_family_card_uids: set[str] = set()
+        self.used_platform_expense_uids: set[str] = set()
+        self.used_repayment_transfer_uids: set[str] = set()
+
+    def deduplicate(self) -> None:
+        detailed: dict[tuple[str, Decimal, str], list[BillTransaction]] = {}
+        for tx in self.txs:
+            if tx.source in {"wechat", "alipay"} and tx.direction == Direction.EXPENSE:
+                detailed.setdefault(tx.same_money_day_key(), []).append(tx)
+            if tx.action == "transfer":
+                detailed.setdefault(tx.same_money_day_key(), []).append(tx)
+
+        for tx in self.txs:
+            if tx.source != "icbc_credit":
+                continue
+            if tx.direction != Direction.EXPENSE and not is_credit_card_repayment_credit(tx):
+                continue
+            if has_reason(tx.review_reason, "unionpay_via_tenpay_missing_from_wechat"):
+                continue
+            candidates = detailed.get(tx.same_money_day_key(), [])
+            merchant = tx.payee.replace("财付通-", "").replace("支付宝-", "")
+            for candidate in candidates:
+                if (
+                    is_credit_card_repayment_credit(tx)
+                    and candidate.action == "transfer"
+                    and candidate.uid not in self.used_repayment_transfer_uids
+                ):
+                    candidate.expense_account = tx.source_account_hint
+                    candidate.review_level = ReviewLevel.OK
+                    candidate.review_reason = replace_reason(
+                        candidate.review_reason,
+                        "unmatched_credit_card_repayment_transfer",
+                        "credit_card_repayment",
+                    )
+                    tx.action = "skip"
+                    tx.income_account = ""
+                    tx.review_level = ReviewLevel.CHECK
+                    tx.review_reason = "duplicate_credit_card_repayment:" + candidate.uid
+                    self.used_repayment_transfer_uids.add(candidate.uid)
+                    break
+            if tx.action == "skip":
+                continue
+
+            expense_candidates = [
+                candidate
+                for candidate in candidates
+                if self._is_available_platform_expense_candidate(
+                    tx,
+                    candidate,
+                )
+            ]
+            duplicate_candidate = self._select_duplicate_candidate(
+                tx,
+                expense_candidates,
+                merchant,
+            )
+            if duplicate_candidate:
+                self._mark_duplicate_match(
+                    tx,
+                    duplicate_candidate,
+                )
+                continue
+            if len(expense_candidates) > 1:
+                tx.review_level = max_review(tx.review_level, ReviewLevel.CHECK)
+                tx.review_reason = append_reason(
+                    tx.review_reason, "ambiguous_same_amount_duplicate"
+                )
+        for tx in self.txs:
+            if (
+                is_payment_platform_credit_card_repayment(tx)
+                and tx.action == "transfer"
+                and not tx.expense_account
+            ):
+                tx.action = "post"
+                tx.expense_account = self.config.manual_income_account
+                tx.review_level = ReviewLevel.MANUAL
+
+    def _is_available_platform_expense_candidate(
+        self,
+        credit_tx: BillTransaction,
+        candidate: BillTransaction,
+    ) -> bool:
+        if candidate.source not in {"wechat", "alipay"} or candidate.direction != Direction.EXPENSE:
+            return False
+        if candidate.amount != credit_tx.amount:
+            return False
+        if candidate.source_account_hint != credit_tx.source_account_hint:
+            return False
+        if candidate.uid in self.used_platform_expense_uids:
+            return False
+        if is_family_card(candidate) and candidate.uid in self.used_family_card_uids:
+            return False
+        return True
+
+    def _select_duplicate_candidate(
+        self,
+        credit_tx: BillTransaction,
+        candidates: list[BillTransaction],
+        merchant: str,
+    ) -> BillTransaction | None:
+        if len(candidates) == 1:
+            return candidates[0]
+        merchant_matches = [
+            candidate
+            for candidate in candidates
+            if self._matches_credit_card_merchant(credit_tx, candidate, merchant)
+        ]
+        if len(merchant_matches) == 1:
+            return merchant_matches[0]
+        return None
+
+    def _mark_duplicate_match(
+        self,
+        credit_tx: BillTransaction,
+        candidate: BillTransaction,
+    ) -> None:
+        credit_tx.action = "skip"
+        credit_tx.review_level = ReviewLevel.CHECK
+        if is_family_card(candidate):
+            self._enrich_family_card(candidate, credit_tx)
+            candidate.expense_account = self.config.expense_account_for(candidate)
+            if candidate.expense_account != self.config.default_expense_account:
+                candidate.review_reason = remove_reason(
+                    candidate.review_reason, "default_expense_account"
+                )
+            credit_tx.review_reason = append_reason(
+                credit_tx.review_reason, f"duplicate_family_card:{candidate.uid}"
+            )
+            self.used_family_card_uids.add(candidate.uid)
+        else:
+            credit_tx.review_reason = append_reason(
+                credit_tx.review_reason, f"duplicate_of:{candidate.uid}"
+            )
+        self.used_platform_expense_uids.add(candidate.uid)
+
+    def _matches_credit_card_merchant(
+        self,
+        credit_tx: BillTransaction,
+        candidate: BillTransaction,
+        merchant: str,
+    ) -> bool:
+        candidate_text = " ".join([candidate.payee, candidate.narration])
+        return (
+            bool(merchant)
+            and candidate.amount == credit_tx.amount
+            and (
+                merchant in candidate.payee
+                or merchant in candidate.narration
+                or candidate.payee in merchant
+                or self.config.same_merchant_text(merchant, candidate_text)
+            )
+        )
+
+    def _enrich_family_card(self, family_tx: BillTransaction, credit_tx: BillTransaction) -> None:
+        original = family_tx.narration.strip()
+        if not original or original == "/":
+            family_tx.narration = credit_tx.payee
+        family_tx.metadata["matched_credit_payee"] = credit_tx.payee
+        family_tx.metadata["matched_credit_type"] = credit_tx.narration
+        family_tx.review_reason = append_reason(
+            family_tx.review_reason, "enriched_from_credit_card"
+        )
 
 
 def append_reason(current: str, reason: str) -> str:
@@ -432,6 +426,25 @@ def replace_reason(current: str, old: str, new: str) -> str:
 def max_review(a: ReviewLevel, b: ReviewLevel) -> ReviewLevel:
     order = {ReviewLevel.OK: 0, ReviewLevel.CHECK: 1, ReviewLevel.MANUAL: 2}
     return a if order[a] >= order[b] else b
+
+
+def transaction_text(tx: BillTransaction) -> str:
+    return " ".join([tx.payee, tx.narration, str(tx.metadata)])
+
+
+def is_family_card(tx: BillTransaction) -> bool:
+    return tx.source == "wechat" and tx.metadata.get("交易类型") == "亲属卡交易"
+
+
+def is_payment_platform_credit_card_repayment(tx: BillTransaction) -> bool:
+    return tx.source in {"alipay", "wechat"} and "信用卡还款" in transaction_text(tx)
+
+
+def is_credit_card_repayment_credit(tx: BillTransaction) -> bool:
+    return tx.source.endswith("_credit") and (
+        tx.metadata.get("txn_type") == "信用卡还款"
+        or tx.metadata.get("is_credit_card_repayment") == "true"
+    )
 
 
 def merge_previous_review_rows(
