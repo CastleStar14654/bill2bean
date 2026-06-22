@@ -248,16 +248,12 @@ class IcbcEmailParser(BillParser):
         if txn_currency != currency:
             metadata["original_amount"] = normalized_txn_amount
             metadata["original_currency"] = txn_currency
-        if (
-            currency == "CNY"
-            and rmb_card
-            and card != rmb_card
-            and self._is_repayment_like(txn_type, merchant, flow)
-        ):
-            account_card = rmb_card
-            metadata["account_card"] = account_card
-            metadata["original_card"] = card
+        if self._is_repayment_like(txn_type, merchant, flow):
             metadata["is_credit_card_repayment"] = "true"
+            if currency == "CNY" and rmb_card and card != rmb_card:
+                account_card = rmb_card
+                metadata["account_card"] = account_card
+                metadata["original_card"] = card
             if txn_type != "信用卡还款":
                 metadata["original_txn_type"] = txn_type
                 metadata["txn_type"] = "信用卡还款"
@@ -325,7 +321,13 @@ class IcbcEmailParser(BillParser):
         return cards.most_common(1)[0][0]
 
     def _is_repayment_like(self, txn_type: str, merchant: str, flow: str) -> bool:
-        return flow == "存入" and txn_type in {"信用卡还款", "转账"} and "退款" not in merchant
+        if flow != "存入" or "退款" in merchant:
+            return False
+        if txn_type in {"信用卡还款", "转账", "转帐"}:
+            return True
+        if txn_type == "他行汇入" and "牡丹卡中心" in merchant:
+            return True
+        return txn_type == "银联入账" and "银联转账" in merchant
 
 
 def parser_for(path: str | Path, config: Config | None = None) -> BillParser:
