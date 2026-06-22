@@ -11,7 +11,11 @@ discount_income_account = "Income:Other"
 
 [[account_rules]]
 pattern = "工商银行信用卡\\(1234\\)|ICBC信用卡\\(1234\\)"
-account = "Liabilities:Credit:Bank:Card1234"
+account = "Liabilities:Credit:Bank:CNYCard1234"
+
+[[account_rules]]
+pattern = "工商银行信用卡\\(5678\\)|ICBC信用卡\\(5678\\)"
+account = "Liabilities:Credit:Bank:FXCard5678"
 
 [[account_rules]]
 pattern = "工商银行储蓄卡\\(1234\\)"
@@ -34,19 +38,19 @@ pattern = "alipay|支付宝"
 account = "Assets:Current:Alipay:YuEBao"
 
 [[expense_rules]]
-pattern = "咖啡|奶茶|饮品|甜汤|1点点|一点点"
+pattern = "咖啡|奶茶|饮品|甜汤|饮品店|示例饮品品牌"
 account = "Expenses:Food:Drink"
 
 [[expense_rules]]
-pattern = "便利店|超市|杂货|生鲜"
+pattern = "便利店|超市|杂货|生鲜|便利杂货|烘焙"
 account = "Expenses:Grocery"
 
 [[expense_rules]]
-pattern = "餐饮|外卖|团购|餐厅|饭店|汉堡|寿司|牛肉粉|比萨"
+pattern = "餐饮|外卖|团购|餐厅|饭店|汉堡|寿司|牛肉粉|越南粉|比萨|披萨|示例外卖平台"
 account = "Expenses:Food:Dining"
 
 [[expense_rules]]
-pattern = "单位食堂|校园卡|一卡通充值"
+pattern = "单位食堂|校园卡|一卡通充值|大学"
 account = "Expenses:Food:Workplace"
 
 [[expense_rules]]
@@ -58,7 +62,11 @@ pattern = "医院|药"
 account = "Expenses:Medical"
 
 [[expense_rules]]
-pattern = "电力|国网"
+pattern = "电影|演出|票务|视频平台"
+account = "Expenses:Entertainment"
+
+[[expense_rules]]
+pattern = "电力|国网|快递|速运"
 account = "Expenses:Utilities"
 
 [[income_rules]]
@@ -76,6 +84,9 @@ account = "Income:Prize"
 [[merchant_alias_rules]]
 pattern = "示例公司主体名"
 aliases = ["示例品牌名", "示例门店名"]
+
+[[credit_card_cashback_rules]]
+merchant_pattern = "Visa|Rewards|Rebate"
 
 [manual_review]
 patterns = [
