@@ -245,6 +245,7 @@ class TransactionList:
         candidate: BillTransaction,
         merchant: str,
     ) -> bool:
+        candidate_text = " ".join([candidate.payee, candidate.narration])
         return (
             bool(merchant)
             and candidate.amount == credit_tx.amount
@@ -252,6 +253,7 @@ class TransactionList:
                 merchant in candidate.payee
                 or merchant in candidate.narration
                 or candidate.payee in merchant
+                or self.config.same_merchant_text(merchant, candidate_text)
             )
         )
 

@@ -18,6 +18,19 @@ class RegexRule:
 
 
 @dataclass
+class MerchantAliasRule:
+    pattern: str
+    aliases: list[str]
+
+    def matches_pair(self, left: str, right: str) -> bool:
+        pattern_in_left = re.search(self.pattern, left, re.IGNORECASE) is not None
+        pattern_in_right = re.search(self.pattern, right, re.IGNORECASE) is not None
+        alias_in_left = any(re.search(alias, left, re.IGNORECASE) for alias in self.aliases)
+        alias_in_right = any(re.search(alias, right, re.IGNORECASE) for alias in self.aliases)
+        return (pattern_in_left and alias_in_right) or (pattern_in_right and alias_in_left)
+
+
+@dataclass
 class Config:
     default_expense_account: str
     default_income_account: str
@@ -31,6 +44,7 @@ class Config:
     account_rules: list[RegexRule]
     expense_rules: list[RegexRule]
     income_rules: list[RegexRule]
+    merchant_alias_rules: list[MerchantAliasRule]
     manual_review_patterns: list[str]
 
     @classmethod
@@ -64,6 +78,10 @@ class Config:
             ],
             income_rules=[
                 RegexRule(r["pattern"], r["account"]) for r in data.get("income_rules", [])
+            ],
+            merchant_alias_rules=[
+                MerchantAliasRule(r["pattern"], _list_value(r, "aliases", "alias"))
+                for r in data.get("merchant_alias_rules", [])
             ],
             manual_review_patterns=data.get("manual_review", {}).get("patterns", []),
         )
@@ -111,3 +129,13 @@ class Config:
             if re.search(pattern, text, re.IGNORECASE):
                 return pattern
         return ""
+
+    def same_merchant_text(self, left: str, right: str) -> bool:
+        return any(rule.matches_pair(left, right) for rule in self.merchant_alias_rules)
+
+
+def _list_value(data: dict, list_key: str, scalar_key: str) -> list[str]:
+    values = data.get(list_key)
+    if values is None and scalar_key in data:
+        values = [data[scalar_key]]
+    return [str(value) for value in values or []]

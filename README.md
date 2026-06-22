@@ -82,6 +82,14 @@ python3 -m bill2bean.cli export review.csv -o imported.bean \
 
 支付优惠通过 `discount_amount` 和 `discount_account` 处理。微信备注中的 `已优惠¥...` 会自动填入 `discount_amount`，支付宝 `收/付款方式` 含 `&` 时只能判断有优惠但没有金额，会标记为 `manual`，需要人工补金额。默认优惠收入账户是 `Income:Other`。
 
+跨账单去重默认使用日期、金额、币种、出账账户和商户名文本匹配。`expense_rules` 只决定消费进入哪个 `Expenses:*` 账户，不参与去重。对于“信用卡账单显示公司主体名、微信/支付宝显示品牌或门店名”的情况，可以在配置中添加商户别名：
+
+```toml
+[[merchant_alias_rules]]
+pattern = "公司主体名"
+aliases = ["品牌名", "门店名"]
+```
+
 最终导出前会强制避免 `manual + skip`：如果一条交易仍是 `manual + skip`，会改成 `post` 并使用 `manual_expense_account` 或 `manual_income_account` 兜底，便于在 Beancount GUI 中筛查。
 
 共同支出可用 `share` 字段自动拆分，`aa_amount` 可用于偶发的对外 AA。`aa_amount` 会先扣除，`share` 再基于剩余实付净额计算共同付款对象的应收。

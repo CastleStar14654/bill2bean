@@ -34,7 +34,7 @@ pattern = "alipay|支付宝"
 account = "Assets:Current:Alipay:YuEBao"
 
 [[expense_rules]]
-pattern = "咖啡|奶茶|饮品|甜汤"
+pattern = "咖啡|奶茶|饮品|甜汤|1点点|一点点"
 account = "Expenses:Food:Drink"
 
 [[expense_rules]]
@@ -72,6 +72,10 @@ account = "Income:Other"
 [[income_rules]]
 pattern = "奖金"
 account = "Income:Prize"
+
+[[merchant_alias_rules]]
+pattern = "示例公司主体名"
+aliases = ["示例品牌名", "示例门店名"]
 
 [manual_review]
 patterns = [
