@@ -132,6 +132,7 @@ class TransactionList:
                 detailed.setdefault(tx.same_money_day_key(), []).append(tx)
 
         used_family_card_uids: set[str] = set()
+        used_platform_expense_uids: set[str] = set()
         used_repayment_transfer_uids: set[str] = set()
         for tx in self.txs:
             if tx.source != "icbc_credit":
@@ -161,9 +162,30 @@ class TransactionList:
                     tx.review_reason = "duplicate_credit_card_repayment:" + candidate.uid
                     used_repayment_transfer_uids.add(candidate.uid)
                     break
+            if tx.action == "skip":
+                continue
+
+            for candidate in candidates:
+                if (
+                    candidate.uid not in used_platform_expense_uids
+                    and not self._is_family_card(candidate)
+                    and self._matches_credit_card_merchant(tx, candidate, merchant)
+                ):
+                    tx.action = "skip"
+                    tx.review_level = ReviewLevel.CHECK
+                    tx.review_reason = append_reason(
+                        tx.review_reason, f"duplicate_of:{candidate.uid}"
+                    )
+                    used_platform_expense_uids.add(candidate.uid)
+                    break
+            if tx.action == "skip":
+                continue
+
+            for candidate in candidates:
                 if (
                     self._is_family_card(candidate)
                     and candidate.uid not in used_family_card_uids
+                    and candidate.uid not in used_platform_expense_uids
                     and candidate.source_account_hint == tx.source_account_hint
                     and candidate.amount == tx.amount
                 ):
@@ -179,21 +201,6 @@ class TransactionList:
                         tx.review_reason, f"duplicate_family_card:{candidate.uid}"
                     )
                     used_family_card_uids.add(candidate.uid)
-                    break
-                if (
-                    merchant
-                    and candidate.amount == tx.amount
-                    and (
-                        merchant in candidate.payee
-                        or merchant in candidate.narration
-                        or candidate.payee in merchant
-                    )
-                ):
-                    tx.action = "skip"
-                    tx.review_level = ReviewLevel.CHECK
-                    tx.review_reason = append_reason(
-                        tx.review_reason, f"duplicate_of:{candidate.uid}"
-                    )
                     break
         for tx in self.txs:
             if (
@@ -231,6 +238,22 @@ class TransactionList:
             else:
                 tx.direction = Direction.EXPENSE
                 tx.expense_account = self.config.manual_expense_account
+
+    def _matches_credit_card_merchant(
+        self,
+        credit_tx: BillTransaction,
+        candidate: BillTransaction,
+        merchant: str,
+    ) -> bool:
+        return (
+            bool(merchant)
+            and candidate.amount == credit_tx.amount
+            and (
+                merchant in candidate.payee
+                or merchant in candidate.narration
+                or candidate.payee in merchant
+            )
+        )
 
     def _is_family_card(self, tx: BillTransaction) -> bool:
         return tx.source == "wechat" and tx.metadata.get("交易类型") == "亲属卡交易"
