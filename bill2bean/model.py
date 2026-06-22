@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
+from functools import total_ordering
 import hashlib
 from typing import Any
 
@@ -15,10 +16,22 @@ class Direction(str, Enum):
     NEUTRAL = "neutral"
 
 
-class ReviewLevel(str, Enum):
-    OK = "ok"
-    CHECK = "check"
-    MANUAL = "manual"
+@total_ordering
+class ReviewLevel(Enum):
+    OK = ("ok", 0)
+    CHECK = ("check", 1)
+    MANUAL = ("manual", 2)
+
+    def __new__(cls, value: str, rank: int) -> "ReviewLevel":
+        obj = object.__new__(cls)
+        obj._value_ = value
+        obj._rank = rank
+        return obj
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, ReviewLevel):
+            return NotImplemented
+        return self._rank < other._rank
 
 
 @dataclass
@@ -131,3 +144,91 @@ class BillTransaction:
 
     def same_money_day_key(self) -> tuple[str, Decimal, str]:
         return (self.date, self.amount.copy_abs(), self.currency)
+
+    def text(self) -> str:
+        return " ".join([self.payee, self.narration, str(self.metadata)])
+
+    def is_family_card(self) -> bool:
+        return self.source == "wechat" and self.metadata.get("交易类型") == "亲属卡交易"
+
+    def is_payment_platform_credit_card_repayment(self) -> bool:
+        return self.source in {"alipay", "wechat"} and "信用卡还款" in self.text()
+
+    def is_credit_card_repayment_credit(self) -> bool:
+        return self.source.endswith("_credit") and (
+            self.metadata.get("txn_type") == "信用卡还款"
+            or self.metadata.get("is_credit_card_repayment") == "true"
+        )
+
+    def is_refund(self) -> bool:
+        if self.source == "icbc_credit" and self.metadata.get("txn_type") == "退款":
+            return True
+        if self.source == "wechat":
+            return "退款" in self.metadata.get("交易类型", "") or "退款" in self.metadata.get("当前状态", "")
+        return False
+
+    def is_alipay_yuebao_transfer(self) -> bool:
+        return (
+            self.source == "alipay"
+            and self.direction == Direction.NEUTRAL
+            and self.metadata.get("交易分类") == "投资理财"
+            and self.payee == "余额宝"
+            and "收益发放" not in self.narration
+        )
+
+    def is_alipay_credit_repayment(self) -> bool:
+        return (
+            self.source == "alipay"
+            and self.direction == Direction.NEUTRAL
+            and self.metadata.get("交易分类") == "信用借还"
+        )
+
+    def is_alipay_safe_investment_neutral(self) -> bool:
+        text = self.text()
+        return (
+            self.source == "alipay"
+            and (
+                self.metadata.get("交易分类") == "投资理财"
+                or "蚂蚁财富" in text
+                or "基金" in text
+                or "黄金ETF" in text
+            )
+            and self.payee != "余额宝"
+        )
+
+    def mark_manual(self, reason: str) -> None:
+        self.review_level = ReviewLevel.MANUAL
+        self.review_reason.add(reason)
+
+    def normalize_receivable_action(self) -> None:
+        if self.share or self.share_amount:
+            self.review_level = ReviewLevel.MANUAL
+            self.review_reason.add("receivable_overrides_share")
+            self.share = ""
+            self.share_amount = ""
+
+    def fill_default_discount_account(self, default_discount_account: str) -> None:
+        self.discount_account = self.discount_account or default_discount_account
+
+    def apply_payment_discount_metadata(self) -> None:
+        if self.metadata.get("discount_amount"):
+            self.discount_amount = str(self.metadata["discount_amount"])
+            self.review_reason.add("payment_discount")
+        elif self.source == "alipay" and "&" in self.metadata.get("收/付款方式", ""):
+            self.review_level = ReviewLevel.MANUAL
+            self.review_reason.add("payment_discount_amount_unknown")
+
+    def force_manual_post(self, manual_income_account: str, manual_expense_account: str) -> None:
+        if self.review_level != ReviewLevel.MANUAL or self.action != "skip":
+            return
+        self.action = "post"
+        self.review_reason.add("forced_manual_post")
+        if self.direction == Direction.INCOME:
+            self.income_account = manual_income_account
+        elif self.direction == Direction.EXPENSE:
+            self.expense_account = manual_expense_account
+        elif self.direction == Direction.TRANSFER:
+            self.expense_account = manual_income_account
+        else:
+            self.direction = Direction.EXPENSE
+            self.expense_account = manual_expense_account
