@@ -165,6 +165,7 @@ class TransactionList:
                     self._is_family_card(candidate)
                     and candidate.uid not in used_family_card_uids
                     and candidate.source_account_hint == tx.source_account_hint
+                    and candidate.amount == tx.amount
                 ):
                     self._enrich_family_card(candidate, tx)
                     candidate.expense_account = self.config.expense_account_for(candidate)
@@ -179,10 +180,14 @@ class TransactionList:
                     )
                     used_family_card_uids.add(candidate.uid)
                     break
-                if merchant and (
-                    merchant in candidate.payee
-                    or merchant in candidate.narration
-                    or candidate.payee in merchant
+                if (
+                    merchant
+                    and candidate.amount == tx.amount
+                    and (
+                        merchant in candidate.payee
+                        or merchant in candidate.narration
+                        or candidate.payee in merchant
+                    )
                 ):
                     tx.action = "skip"
                     tx.review_level = ReviewLevel.CHECK

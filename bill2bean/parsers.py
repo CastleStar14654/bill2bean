@@ -198,9 +198,12 @@ class IcbcEmailParser(BillParser):
         rmb_card = self._rmb_unionpay_card(detail_rows)
         for row_number, row in detail_rows:
             tx = self._parse_detail_row(row, row_number, rmb_card)
-            if tx.metadata["txn_type"] == "刷卡金" and "入账" in tx.payee and previous_postable:
+            if self._is_cashback_adjustment(tx) and previous_postable:
                 tx.action = "merge_cashback"
                 tx.income_account = "Income:Cashback"
+                if "退款" in tx.payee:
+                    tx.amount = -tx.amount
+                    tx.direction = Direction.INCOME
                 tx.review_reason = f"cashback_for:{previous_postable.uid}"
                 previous_postable.metadata.setdefault("cashbacks", []).append(
                     {"amount": str(tx.amount), "payee": tx.payee}
@@ -209,6 +212,11 @@ class IcbcEmailParser(BillParser):
                 previous_postable = tx
             txs.append(tx)
         return txs
+
+    def _is_cashback_adjustment(self, tx: BillTransaction) -> bool:
+        return tx.metadata["txn_type"] == "刷卡金" and (
+            "入账" in tx.payee or "退款" in tx.payee
+        )
 
     def _parse_detail_row(
         self, row: list[str], row_number: int, rmb_card: str | None

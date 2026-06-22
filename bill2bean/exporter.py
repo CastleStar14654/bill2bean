@@ -88,14 +88,41 @@ def _parse_filter_date(value: str, option: str) -> date | None:
 
 
 def cashback_mapping(rows: list[dict[str, str]]) -> dict[str, list[dict[str, str]]]:
+    duplicate_redirects = _duplicate_parent_redirects(rows)
     cashbacks: dict[str, list[dict[str, str]]] = {}
     for row in rows:
         if row.get("action") != "merge_cashback":
             continue
         for reason in row.get("review_reason", "").split(";"):
             if reason.startswith("cashback_for:"):
-                cashbacks.setdefault(reason.removeprefix("cashback_for:"), []).append(row)
+                parent_uid = reason.removeprefix("cashback_for:")
+                parent_uid = _redirect_parent_uid(parent_uid, duplicate_redirects)
+                cashbacks.setdefault(parent_uid, []).append(row)
     return cashbacks
+
+
+def _duplicate_parent_redirects(rows: list[dict[str, str]]) -> dict[str, str]:
+    redirects: dict[str, str] = {}
+    for row in rows:
+        uid = row.get("uid", "")
+        if not uid:
+            continue
+        for reason in row.get("review_reason", "").split(";"):
+            if reason.startswith("duplicate_of:"):
+                redirects[uid] = reason.removeprefix("duplicate_of:")
+                break
+            if reason.startswith("duplicate_family_card:"):
+                redirects[uid] = reason.removeprefix("duplicate_family_card:")
+                break
+    return redirects
+
+
+def _redirect_parent_uid(parent_uid: str, redirects: dict[str, str]) -> str:
+    seen: set[str] = set()
+    while parent_uid in redirects and parent_uid not in seen:
+        seen.add(parent_uid)
+        parent_uid = redirects[parent_uid]
+    return parent_uid
 
 
 def required_accounts_for_export(
@@ -190,7 +217,8 @@ def _format_transaction(row: dict[str, str], cashbacks: list[dict[str, str]]) ->
             cb_amount = Decimal(cashback["amount"])
             source_amount -= cb_amount
             income_account = cashback.get("income_account") or "Income:Cashback"
-            lines.append(f"  {income_account}  -{cb_amount:.2f} {currency}")
+            income_amount = -cb_amount
+            lines.append(f"  {income_account}  {income_amount:.2f} {currency}")
         lines.append(f'  {row["source_account"]}  {-source_amount:.2f} {currency}')
     elif direction == "income":
         lines.append(f'  {row["source_account"]}  {amount:.2f} {currency}')

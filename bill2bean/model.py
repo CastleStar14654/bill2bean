@@ -56,17 +56,19 @@ class BillTransaction:
 
     @property
     def uid(self) -> str:
-        raw = "|".join(
-            [
-                self.source,
-                self.source_id,
-                self.time.isoformat(),
-                self.payee,
-                self.narration,
-                str(self.amount),
-                self.direction.value,
-            ]
-        )
+        if self.source_id:
+            raw = "|".join([self.source, self.source_id])
+        else:
+            raw = "|".join(
+                [
+                    self.source,
+                    self.time.isoformat(),
+                    self.payee,
+                    self.narration,
+                    str(self.amount),
+                    self.direction.value,
+                ]
+            )
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
     def same_money_day_key(self) -> tuple[str, Decimal, str]:
