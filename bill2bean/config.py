@@ -46,6 +46,39 @@ class CreditCardCashbackRule:
 
 
 @dataclass
+class FundSettlementRule:
+    pattern: str
+    settlement_days: int
+
+    def matches(self, text: str) -> bool:
+        return re.search(self.pattern, text, re.IGNORECASE) is not None
+
+
+@dataclass
+class FundConfig:
+    default_account: str
+    default_income_account: str
+    commission_account: str
+    default_settlement_days: int
+    share_precision: int
+    accounts: dict[str, str]
+    income_accounts: dict[str, str]
+    settlement_rules: list[FundSettlementRule]
+
+    def account_for_asset_class(self, asset_class: str) -> str:
+        return self.accounts.get(asset_class, self.default_account)
+
+    def income_account_for_asset_class(self, asset_class: str) -> str:
+        return self.income_accounts.get(asset_class, self.default_income_account)
+
+    def settlement_days_for_text(self, text: str) -> int:
+        for rule in self.settlement_rules:
+            if rule.matches(text):
+                return rule.settlement_days
+        return self.default_settlement_days
+
+
+@dataclass
 class Config:
     default_expense_account: str
     default_income_account: str
@@ -61,11 +94,13 @@ class Config:
     merchant_alias_rules: list[MerchantAliasRule]
     credit_card_cashback_rules: list[CreditCardCashbackRule]
     manual_review_patterns: list[str]
+    funds: FundConfig
 
     @classmethod
     def load(cls, path: str | Path) -> "Config":
         data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
         defaults = data.get("defaults", {})
+        funds = data.get("funds", {})
         return cls(
             default_expense_account=defaults.get("expense_account", "Expenses:Other"),
             default_income_account=defaults.get("income_account", "Income:Other"),
@@ -99,6 +134,31 @@ class Config:
                 for r in data.get("credit_card_cashback_rules", [])
             ],
             manual_review_patterns=data.get("manual_review", {}).get("patterns", []),
+            funds=FundConfig(
+                default_account=funds.get("default_account", "Assets:Invest:Alipay:Fund"),
+                default_income_account=funds.get(
+                    "default_income_account",
+                    "Income:Invest:Alipay:Fund",
+                ),
+                commission_account=funds.get(
+                    "commission_account",
+                    "Expenses:Invest:Commissions",
+                ),
+                default_settlement_days=int(funds.get("default_settlement_days", 1)),
+                share_precision=int(funds.get("share_precision", 2)),
+                accounts={
+                    str(key): str(value)
+                    for key, value in funds.get("accounts", {}).items()
+                },
+                income_accounts={
+                    str(key): str(value)
+                    for key, value in funds.get("income_accounts", {}).items()
+                },
+                settlement_rules=[
+                    FundSettlementRule(str(r["pattern"]), int(r["settlement_days"]))
+                    for r in funds.get("settlement_rules", [])
+                ],
+            ),
         )
 
     def text_for(self, tx: BillTransaction) -> str:

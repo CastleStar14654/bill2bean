@@ -1,0 +1,10 @@
+2020-01-01 commodity SAMPLE_FUND_000001
+  name: "示例基金C"
+  asset-class: "fund"
+  price: "CNY:eastmoneyfund/000001"
+  settlement-days: "2"
+
+2020-01-01 commodity SAMPLE_AU9999_000003
+  name: "示例黄金ETF联接E"
+  asset-class: "au9999"
+  price: "CNY:eastmoneyfund/000003"

@@ -33,15 +33,43 @@ def export_beancount(
     review_csv: str | Path,
     output: str | Path,
     include_accounts: str = "",
+    include_files: list[str] | None = None,
     operating_currency: str = "",
+    investment_header_options: bool = False,
     include_sources: set[str] | None = None,
     exclude_sources: set[str] | None = None,
     start_date: str = "",
     end_date: str = "",
 ) -> None:
     all_rows = read_review_csv(review_csv)
+    text = render_beancount(
+        all_rows,
+        include_accounts=include_accounts,
+        include_files=include_files,
+        operating_currency=operating_currency,
+        investment_header_options=investment_header_options,
+        include_sources=include_sources,
+        exclude_sources=exclude_sources,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    Path(output).write_text(text, encoding="utf-8")
+
+
+def render_beancount(
+    rows: list[ReviewRow],
+    include_accounts: str = "",
+    include_files: list[str] | None = None,
+    operating_currency: str = "",
+    investment_header_options: bool = False,
+    include_sources: set[str] | None = None,
+    exclude_sources: set[str] | None = None,
+    start_date: str = "",
+    end_date: str = "",
+) -> str:
+    all_rows = rows
     cashback_by_parent = cashback_mapping(all_rows)
-    rows = filter_review_rows(
+    filtered = filter_review_rows(
         all_rows,
         include_sources=include_sources,
         exclude_sources=exclude_sources,
@@ -50,16 +78,21 @@ def export_beancount(
     )
 
     chunks: list[str] = []
-    for row in rows:
+    for row in filtered:
         draft = _build_transaction_draft(row, cashback_by_parent.get(row["uid"], []))
         if not draft:
             continue
         chunk = _format_transaction(draft)
         if chunk:
             chunks.append(chunk)
-    parts = _format_header(include_accounts, operating_currency)
+    parts = _format_header(
+        include_accounts,
+        include_files or [],
+        operating_currency,
+        investment_header_options,
+    )
     parts.extend(chunks)
-    Path(output).write_text("\n".join(parts).rstrip() + "\n", encoding="utf-8")
+    return "\n".join(parts).rstrip() + "\n"
 
 
 def filter_review_rows(
@@ -162,14 +195,27 @@ def required_accounts_for_export(
     return accounts
 
 
-def _format_header(include_accounts: str, operating_currency: str) -> list[str]:
+def _format_header(
+    include_accounts: str,
+    include_files: list[str],
+    operating_currency: str,
+    investment_header_options: bool,
+) -> list[str]:
     lines: list[str] = []
     if include_accounts:
         lines.append(f'include "{_escape_directive_value(include_accounts)}"')
+    for include_file in include_files:
+        if include_file:
+            lines.append(f'include "{_escape_directive_value(include_file)}"')
     if operating_currency:
         lines.append(
             f'option "operating_currency" "{_escape_directive_value(operating_currency)}"'
         )
+    if include_accounts or include_files or operating_currency or investment_header_options:
+        lines.append('option "render_commas" "True"')
+    if investment_header_options:
+        lines.append('option "booking_method" "FIFO"')
+        lines.append('option "infer_tolerance_from_cost" "TRUE"')
     if lines:
         lines.append("")
     return lines

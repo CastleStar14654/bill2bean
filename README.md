@@ -48,6 +48,7 @@ python3 -m bill2bean.cli export review.csv -o imported.bean \
 ```beancount
 include "accounts.bean"
 option "operating_currency" "CNY"
+option "render_commas" "True"
 ```
 
 导出时也可以按来源和日期过滤：
@@ -62,9 +63,21 @@ python3 -m bill2bean.cli export review.csv -o imported.bean \
 
 `--include-source` 和 `--exclude-source` 都可以重复使用，也可以用逗号分隔。过滤顺序是先 include，再 exclude；日期起止都包含，格式必须是 `YYYY-MM-DD`。如果用 `--accounts`，只会校验实际导出的分录账户。
 
+支付宝基金/黄金交易默认不会随普通消费导出；它们在 `review.csv` 中使用 `action=invest`。需要导出时同时指定 commodity 文件、基金交易输出文件和价格文件：
+
+```bash
+python3 -m bill2bean.cli export review.csv -o imported.bean \
+  --accounts accounts.bean --with-header \
+  --fund-commodities commodities.bean \
+  --fund-output \
+  --price-output
+```
+
+`--fund-output`、`--price-output` 可以显式给出文件名；如果选项后不跟参数，则表示使用 `-o` 的主输出文件。程序会先合并内容再写入，每个目标文件只写一次。默认只读取 `--price-output` 中已有的 `price` 指令；加 `--fetch-fund-prices` 才会调用 `bean-price -i -c` 抓取所需日期价格。启用基金导出且使用 `--with-header` 时，文件头还会 include `--fund-commodities`，并写入 `option "booking_method" "FIFO"` 和 `option "infer_tolerance_from_cost" "TRUE"`。价格缺失时，基金交易会用 `!` 暂记为 CNY 金额。
+
 ## 核对 CSV 约定
 
-`review.csv` 的列顺序按人工核对流程排列：固定长度的 `uid` 放在行首，`action` 和 `review_level` 之后紧跟初始常为空、需要人工填写的 `aa_amount`、`share`、`share_amount`、`discount_amount`；`direction`、`amount`、`currency` 紧跟 `source`，`review_reason` 放在金额信息之后，较长的 `source_id` 放在末尾。时间只输出 `time`，其中包含完整日期和时间；导出 Beancount 时会从 `time` 中取日期。
+`review.csv` 的列顺序按人工核对流程排列：固定长度的 `uid` 放在行首，`action` 和 `review_level` 之后紧跟初始常为空、需要人工填写的 `aa_amount`、`share`、`share_amount`、`discount_amount` 以及投资覆盖字段；`direction`、`amount`、`currency` 紧跟 `source`，`review_reason` 放在金额信息之后，较长的 `source_id` 放在末尾。时间只输出 `time`，其中包含完整日期和时间；导出 Beancount 时会从 `time` 中取日期。
 
 工行信用卡外币账单以“记账金额/币种”为 `amount` 和 `currency`，日期使用记账日。如果“交易金额/币种”和“记账金额/币种”不同，会额外填入 `original_amount` 和 `original_currency`；导出 Beancount 时消费分录会使用 `@@`，例如 `13100.00 CLP @@ 14.21 USD`。
 
@@ -78,7 +91,39 @@ python3 -m bill2bean.cli export review.csv -o imported.bean \
 - `skip`：不导出，常用于重复项或中性交易。
 - `receivable`：公务出差等报销条目。整笔实付净额进入 `receivable_account`，默认 `Assets:Receivables:Employer`。
 - `transfer`：账户间转账。支付平台的信用卡还款会先作为候选转账，匹配到信用卡账单还款入账后再补全目标信用卡账户。
+- `invest`：支付宝基金/黄金买入卖出。普通导出跳过，只有指定基金导出参数时才输出。
 - `merge_cashback`：工商银行刷卡金自动行，不单独导出，会合并进上一条信用卡消费。按日期或来源过滤导出时，只要父消费被导出，对应刷卡金仍会合并进去。
+
+基金 commodity 文件使用 `name` 元数据和支付宝基金名称精确匹配，`asset-class` 决定资产账户映射，`price` 元数据供 `bean-price` 使用；`settlement-days` 可以覆盖卖出确认价格日的 T+N 规则：
+
+```beancount
+2020-01-01 commodity SAMPLE_FUND_000001
+  name: "示例基金C"
+  asset-class: "fund"
+  price: "CNY:eastmoneyfund/000001"
+  settlement-days: "2"
+```
+
+配置中的基金账户按 `asset-class` 映射；如果 commodity 没有 `settlement-days`，卖出确认价格日的 T+N 规则按 pattern 顺序匹配：
+
+```toml
+[funds]
+default_account = "Assets:Invest:Alipay:Fund"
+default_income_account = "Income:Invest:Alipay:Fund"
+commission_account = "Expenses:Invest:Commissions"
+default_settlement_days = 1
+share_precision = 2
+
+[funds.accounts]
+fund = "Assets:Invest:Alipay:Fund"
+au9999 = "Assets:Invest:Alipay:AU9999"
+
+[[funds.settlement_rules]]
+pattern = "QDII|纳斯达克"
+settlement_days = 2
+```
+
+`investment_units`、`investment_price`、`investment_price_date` 可以在 CSV 中人工覆盖自动计算；`commission_amount` 非空时会额外写入手续费账户，默认 `commission_account`。
 
 信用卡返现商户可以在配置中添加规则。规则只匹配商户名，可选限制卡号；不要用“境外退货”等交易类型识别返现，因为真实退货也可能使用同一交易类型。配置规则识别出的返现会作为独立收入导出到 `cashback_income_account`，适合外币卡返现和原消费日期相隔较远的情况；工行人民币“刷卡金”仍使用 `merge_cashback` 合并到对应消费。
 

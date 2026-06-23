@@ -5,7 +5,8 @@ imported.bean
 *.xlsx
 *.csv
 
-config.personal.toml.bak
+config.personal.toml
+commodities.personal.bean
 accounts.personal.bean
 
 __pycache__/

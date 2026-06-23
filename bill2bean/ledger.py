@@ -18,6 +18,10 @@ REVIEW_FIELDS = [
     "share",
     "share_amount",
     "discount_amount",
+    "investment_units",
+    "investment_price",
+    "investment_price_date",
+    "commission_amount",
     "time",
     "source",
     "direction",
@@ -35,6 +39,7 @@ REVIEW_FIELDS = [
     "aa_account",
     "share_account",
     "discount_account",
+    "commission_account",
     "notes",
     "tags",
     "links",
@@ -51,6 +56,10 @@ class ReviewRow:
     share: str = ""
     share_amount: str = ""
     discount_amount: str = ""
+    investment_units: str = ""
+    investment_price: str = ""
+    investment_price_date: str = ""
+    commission_amount: str = ""
     time: str = ""
     source: str = ""
     direction: str = ""
@@ -68,6 +77,7 @@ class ReviewRow:
     aa_account: str = ""
     share_account: str = ""
     discount_account: str = ""
+    commission_account: str = ""
     notes: str = ""
     tags: str = ""
     links: str = ""
@@ -87,6 +97,10 @@ class ReviewRow:
             share=tx.share,
             share_amount=tx.share_amount,
             discount_amount=tx.discount_amount,
+            investment_units=tx.investment_units,
+            investment_price=tx.investment_price,
+            investment_price_date=tx.investment_price_date,
+            commission_amount=tx.commission_amount,
             time=tx.time.isoformat(sep=" "),
             source=tx.source,
             direction=tx.direction.value,
@@ -104,6 +118,7 @@ class ReviewRow:
             aa_account=tx.aa_account,
             share_account=tx.share_account,
             discount_account=tx.discount_account,
+            commission_account=tx.commission_account,
             notes=tx.notes,
             tags=tx.tags,
             links=tx.links,
@@ -158,10 +173,26 @@ class TransactionList:
         normalizer = TransactionNormalizer(self.config)
         for tx in self.txs:
             normalizer.normalize(tx)
+        self._review_unmatched_investment_refunds()
         CrossSourceMatcher(self.txs, self.config).deduplicate()
         for tx in self.txs:
             normalizer.force_manual_post(tx)
         return self
+
+    def _review_unmatched_investment_refunds(self) -> None:
+        refunded_buys = {
+            tx.investment_refund_key()
+            for tx in self.txs
+            if tx.is_refunded_alipay_investment_buy()
+        }
+        for tx in self.txs:
+            if not tx.is_alipay_investment_buy_refund():
+                continue
+            if tx.investment_refund_key() in refunded_buys:
+                tx.review_reason.add("matched_investment_buy_refund")
+                continue
+            tx.review_level = max(tx.review_level, ReviewLevel.CHECK)
+            tx.review_reason.add("unmatched_investment_buy_refund")
 
     def write_review_csv(
         self,
@@ -210,6 +241,8 @@ class TransactionNormalizer:
             self._apply_yuebao_transfer(tx)
         elif tx.is_alipay_credit_repayment():
             self._apply_alipay_credit_repayment(tx)
+        elif tx.is_alipay_investment_trade():
+            tx.mark_investment_trade(self.config.funds.commission_account)
         return False
 
     def _apply_expense_rules(self, tx: BillTransaction) -> None:
@@ -269,7 +302,7 @@ class TransactionNormalizer:
             tx.mark_manual(f"manual_pattern:{reason}")
 
     def _apply_neutral_policy(self, tx: BillTransaction) -> None:
-        if tx.direction != Direction.NEUTRAL:
+        if tx.direction != Direction.NEUTRAL or tx.action == "invest":
             return
         tx.action = "skip"
         if tx.review_level != ReviewLevel.MANUAL:

@@ -87,6 +87,25 @@ aliases = ["示例品牌名", "示例门店名"]
 [[credit_card_cashback_rules]]
 merchant_pattern = "Visa|Rewards|Rebate"
 
+[funds]
+default_account = "Assets:Invest:Alipay:Fund"
+default_income_account = "Income:Invest:Alipay:Fund"
+commission_account = "Expenses:Invest:Commissions"
+default_settlement_days = 1
+share_precision = 2
+
+[funds.accounts]
+fund = "Assets:Invest:Alipay:Fund"
+au9999 = "Assets:Invest:Alipay:AU9999"
+
+[funds.income_accounts]
+fund = "Income:Invest:Alipay:Fund"
+au9999 = "Income:Invest:Alipay:Fund"
+
+[[funds.settlement_rules]]
+pattern = "QDII|纳斯达克"
+settlement_days = 2
+
 [manual_review]
 patterns = [
   "财付通\\(银联云闪付\\)",

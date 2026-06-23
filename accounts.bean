@@ -4,6 +4,8 @@ option "operating_currency" "CNY"
 2020-01-01 open Assets:Current:Bank:Checking1234 CNY, USD
 2020-01-01 open Assets:Current:Alipay:YuEBao CNY
 2020-01-01 open Assets:Current:WeChat:LQT CNY
+2020-01-01 open Assets:Invest:Alipay:Fund
+2020-01-01 open Assets:Invest:Alipay:AU9999
 2020-01-01 open Assets:Receivables:Employer CNY
 2020-01-01 open Assets:Receivables:Partner CNY
 2020-01-01 open Assets:Receivables:Other CNY
@@ -22,8 +24,10 @@ option "operating_currency" "CNY"
 2020-01-01 open Expenses:Medical CNY
 2020-01-01 open Expenses:Entertainment CNY
 2020-01-01 open Expenses:Utilities CNY
+2020-01-01 open Expenses:Invest:Commissions
 
 2020-01-01 open Income:Other
 2020-01-01 open Income:Prize CNY
 2020-01-01 open Income:Rebate:Bank CNY, USD
 2020-01-01 open Income:Current:Alipay:YuEBao CNY
+2020-01-01 open Income:Invest:Alipay:Fund

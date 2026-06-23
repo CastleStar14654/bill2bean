@@ -122,6 +122,11 @@ class BillTransaction:
     share_amount: str = ""
     discount_account: str = ""
     discount_amount: str = ""
+    investment_units: str = ""
+    investment_price: str = ""
+    investment_price_date: str = ""
+    commission_amount: str = ""
+    commission_account: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -209,6 +214,40 @@ class BillTransaction:
             and self.payee != "余额宝"
         )
 
+    def is_alipay_investment_trade(self) -> bool:
+        if self.source != "alipay" or self.metadata.get("交易分类") != "投资理财":
+            return False
+        if self.payee == "余额宝" or "余额宝-收益发放" in self.narration:
+            return False
+        if "退款" in self.narration or "退款" in self.metadata.get("交易状态", ""):
+            return False
+        if "蚂蚁（杭州）基金销售有限公司" not in self.payee:
+            return False
+        return "买入" in self.narration or "卖出" in self.narration
+
+    def is_alipay_investment_buy_refund(self) -> bool:
+        return (
+            self.source == "alipay"
+            and "买入退款" in self.narration
+            and "退款" in self.metadata.get("交易状态", self.metadata.get("交易分类", ""))
+        )
+
+    def is_refunded_alipay_investment_buy(self) -> bool:
+        return (
+            self.source == "alipay"
+            and self.metadata.get("交易分类") == "投资理财"
+            and "买入" in self.narration
+            and "退款" in self.metadata.get("交易状态", "")
+        )
+
+    def investment_refund_key(self) -> tuple[str, Decimal, str]:
+        name = self.narration
+        for suffix in ("-买入退款", "-买入"):
+            if suffix in name:
+                name = name.split(suffix, 1)[0]
+                break
+        return (self.date, self.amount, name)
+
     def mark_manual(self, reason: str) -> None:
         self.review_level = ReviewLevel.MANUAL
         self.review_reason.add(reason)
@@ -272,6 +311,12 @@ class BillTransaction:
             self.source_account_hint = source_account
         self.expense_account = target_account
         self.review_reason.add(reason)
+
+    def mark_investment_trade(self, commission_account: str) -> None:
+        self.action = "invest"
+        self.review_level = ReviewLevel.OK
+        self.commission_account = self.commission_account or commission_account
+        self.review_reason.add("investment_trade")
 
     def fill_default_discount_account(self, default_discount_account: str) -> None:
         self.discount_account = self.discount_account or default_discount_account
