@@ -111,6 +111,21 @@ class Config:
         ]
         return " ".join(p for p in parts if p)
 
+    def manual_review_text_for(self, tx: BillTransaction) -> str:
+        metadata = {
+            key: value
+            for key, value in tx.metadata.items()
+            if not _is_opaque_metadata_key(str(key))
+        }
+        parts = [
+            tx.source,
+            tx.payee,
+            tx.narration,
+            tx.source_account_hint,
+            str(metadata),
+        ]
+        return " ".join(p for p in parts if p)
+
     def source_account_for(self, tx: BillTransaction) -> str:
         text = self.text_for(tx)
         account = self.account_for_text(text)
@@ -139,7 +154,7 @@ class Config:
         return self.default_income_account
 
     def needs_manual_review(self, tx: BillTransaction) -> str:
-        text = self.text_for(tx)
+        text = self.manual_review_text_for(tx)
         for pattern in self.manual_review_patterns:
             if re.search(pattern, text, re.IGNORECASE):
                 return pattern
@@ -157,3 +172,17 @@ def _list_value(data: dict, list_key: str, scalar_key: str) -> list[str]:
     if values is None and scalar_key in data:
         values = [data[scalar_key]]
     return [str(value) for value in values or []]
+
+
+def _is_opaque_metadata_key(key: str) -> bool:
+    lowered = key.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "id",
+            "uid",
+            "订单号",
+            "单号",
+            "流水号",
+        )
+    )
