@@ -100,7 +100,7 @@ pattern = "公司主体名"
 aliases = ["品牌名", "门店名"]
 ```
 
-最终导出前会强制避免 `manual + skip`：如果一条交易仍是 `manual + skip`，会改成 `post` 并使用 `manual_expense_account` 或 `manual_income_account` 兜底，便于在 Beancount GUI 中筛查。
+最终导出前会强制避免 `manual + skip`：如果一条交易仍是 `manual + skip`，会改成 `post` 并使用默认 `Expenses:Other` 或 `Income:Other` 兜底；如果未知的是出账账户或转账对方，则使用 `suspense_account`，默认 `Assets:Unknown`。这些兜底 posting 会导出为 Beancount 的 `!` posting flag，便于在 Beancount GUI 中作为 warning 筛查。普通默认支出分类或普通支付优惠进入 `Other` 不会自动加 `!`；只有 `review_reason` 中带 `flagged_account:<account>` 的账户会被标记。兜底账户仍需要在账户文件中 `open`。
 
 共同支出可用 `share` 字段自动拆分，`aa_amount` 可用于偶发的对外 AA。`aa_amount` 会先扣除，`share` 再基于剩余实付净额计算共同付款对象的应收。
 

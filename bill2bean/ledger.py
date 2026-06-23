@@ -183,8 +183,8 @@ class TransactionList:
                 )
                 if tx.is_credit_card_repayment_credit():
                     tx.action = "post"
-                    tx.income_account = self.config.manual_income_account
-                    tx.review_level = ReviewLevel.MANUAL
+                    tx.income_account = self.config.default_income_account
+                    tx.flag_account(self.config.default_income_account)
                     tx.review_reason.add("unmatched_credit_card_repayment")
             elif tx.is_payment_platform_credit_card_repayment():
                 tx.direction = Direction.TRANSFER
@@ -226,16 +226,18 @@ class TransactionList:
                     )
                 if not tx.review_reason:
                     tx.review_reason.add("neutral_transaction")
-            if not tx.source_account_hint or tx.source_account_hint == "Assets:Unknown":
+            if not tx.source_account_hint or tx.source_account_hint == self.config.suspense_account:
                 tx.mark_manual("unknown_source_account")
+                tx.flag_account(self.config.suspense_account)
             if tx.direction == Direction.EXPENSE and tx.expense_account == self.config.default_expense_account:
                 tx.review_level = max(tx.review_level, ReviewLevel.CHECK)
                 tx.review_reason.add("default_expense_account")
         CrossSourceMatcher(self.txs, self.config).deduplicate()
         for tx in self.txs:
             tx.force_manual_post(
-                self.config.manual_income_account,
-                self.config.manual_expense_account,
+                self.config.default_income_account,
+                self.config.default_expense_account,
+                self.config.suspense_account,
             )
         return self
 
@@ -340,8 +342,8 @@ class CrossSourceMatcher:
                 and not tx.expense_account
             ):
                 tx.action = "post"
-                tx.expense_account = self.config.manual_income_account
-                tx.review_level = ReviewLevel.MANUAL
+                tx.expense_account = self.config.suspense_account
+                tx.flag_account(self.config.suspense_account)
 
     def _is_available_platform_expense_candidate(
         self,

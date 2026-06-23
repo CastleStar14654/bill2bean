@@ -87,6 +87,13 @@ class ReviewReasons:
     def cashback_parent_uid(self) -> str:
         return self.value_after_prefix(("cashback_for:",))
 
+    def flagged_accounts(self) -> set[str]:
+        return {
+            reason.removeprefix("flagged_account:")
+            for reason in self.items
+            if reason.startswith("flagged_account:")
+        }
+
 
 @dataclass
 class BillTransaction:
@@ -206,6 +213,9 @@ class BillTransaction:
         self.review_level = ReviewLevel.MANUAL
         self.review_reason.add(reason)
 
+    def flag_account(self, account: str) -> None:
+        self.mark_manual(f"flagged_account:{account}")
+
     def normalize_receivable_action(self) -> None:
         if self.share or self.share_amount:
             self.review_level = ReviewLevel.MANUAL
@@ -224,17 +234,26 @@ class BillTransaction:
             self.review_level = ReviewLevel.MANUAL
             self.review_reason.add("payment_discount_amount_unknown")
 
-    def force_manual_post(self, manual_income_account: str, manual_expense_account: str) -> None:
+    def force_manual_post(
+        self,
+        default_income_account: str,
+        default_expense_account: str,
+        suspense_account: str,
+    ) -> None:
         if self.review_level != ReviewLevel.MANUAL or self.action != "skip":
             return
         self.action = "post"
         self.review_reason.add("forced_manual_post")
         if self.direction == Direction.INCOME:
-            self.income_account = manual_income_account
+            self.income_account = default_income_account
+            self.flag_account(default_income_account)
         elif self.direction == Direction.EXPENSE:
-            self.expense_account = manual_expense_account
+            self.expense_account = default_expense_account
+            self.flag_account(default_expense_account)
         elif self.direction == Direction.TRANSFER:
-            self.expense_account = manual_income_account
+            self.expense_account = suspense_account
+            self.flag_account(suspense_account)
         else:
             self.direction = Direction.EXPENSE
-            self.expense_account = manual_expense_account
+            self.expense_account = default_expense_account
+            self.flag_account(default_expense_account)

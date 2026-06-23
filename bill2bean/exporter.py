@@ -16,6 +16,7 @@ class Posting:
     currency: str
     total_price_amount: Decimal | None = None
     total_price_currency: str = ""
+    flag: str = ""
 
 
 @dataclass(frozen=True)
@@ -207,10 +208,10 @@ def _build_transaction_draft(
             aa_amount = _decimal(row.get("aa_amount") or "0")
             reimbursable_amount = amount - aa_amount
             if reimbursable_amount:
-                postings.append(Posting(row["receivable_account"], reimbursable_amount, currency))
+                postings.append(_posting(row, row["receivable_account"], reimbursable_amount, currency))
             if aa_amount:
-                postings.append(Posting(row["aa_account"], aa_amount, currency))
-            postings.append(Posting(row["source_account"], -amount, currency))
+                postings.append(_posting(row, row["aa_account"], aa_amount, currency))
+            postings.append(_posting(row, row["source_account"], -amount, currency))
             return _draft(row, metadata, postings)
         source_amount = amount
         discount_amount = _decimal(row.get("discount_amount") or "0")
@@ -220,40 +221,40 @@ def _build_transaction_draft(
         personal_amount = gross_amount - aa_amount - share_amount
         if aa_amount or share_amount:
             if personal_amount:
-                postings.append(Posting(row["expense_account"], personal_amount, currency))
+                postings.append(_posting(row, row["expense_account"], personal_amount, currency))
             if aa_amount:
-                postings.append(Posting(row["aa_account"], aa_amount, currency))
+                postings.append(_posting(row, row["aa_account"], aa_amount, currency))
             if share_amount:
-                postings.append(Posting(row["share_account"], share_amount, currency))
+                postings.append(_posting(row, row["share_account"], share_amount, currency))
         else:
             postings.append(_expense_posting(row, row["expense_account"], gross_amount, currency))
         if discount_amount:
             postings.append(
-                Posting(row.get("discount_account") or "Income:Other", -discount_amount, currency)
+                _posting(row, row.get("discount_account") or "Income:Other", -discount_amount, currency)
             )
         for cashback in cashbacks:
             cb_amount = _decimal(cashback["amount"])
             source_amount -= cb_amount
             income_account = cashback.get("income_account") or "Income:Cashback"
             income_amount = -cb_amount
-            postings.append(Posting(income_account, income_amount, currency))
-        postings.append(Posting(row["source_account"], -source_amount, currency))
+            postings.append(_posting(row, income_account, income_amount, currency))
+        postings.append(_posting(row, row["source_account"], -source_amount, currency))
     elif direction == "income":
-        postings.append(Posting(row["source_account"], amount, currency))
-        postings.append(Posting(row["income_account"], -amount, currency))
+        postings.append(_posting(row, row["source_account"], amount, currency))
+        postings.append(_posting(row, row["income_account"], -amount, currency))
     elif direction == "transfer":
         if not row.get("expense_account"):
             return None
         discount_amount = _decimal(row.get("discount_amount") or "0")
         target_amount = amount + discount_amount
-        postings.append(Posting(row["expense_account"], target_amount, currency))
+        postings.append(_posting(row, row["expense_account"], target_amount, currency))
         if discount_amount:
             postings.append(
-                Posting(row.get("discount_account") or "Income:Other", -discount_amount, currency)
+                _posting(row, row.get("discount_account") or "Income:Other", -discount_amount, currency)
             )
-        postings.append(Posting(row["source_account"], -amount, currency))
+        postings.append(_posting(row, row["source_account"], -amount, currency))
     else:
-        postings.append(Posting(row["source_account"], amount, currency))
+        postings.append(_posting(row, row["source_account"], amount, currency))
     return _draft(row, metadata, postings)
 
 
@@ -280,7 +281,8 @@ def _format_transaction(draft: TransactionDraft) -> str:
     for key, value in draft.metadata:
         lines.append(f"  {key}: {_quote(value)}")
     for posting in draft.postings:
-        line = f"  {posting.account}  {posting.amount:.2f} {posting.currency}"
+        flag = f"{posting.flag} " if posting.flag else ""
+        line = f"  {flag}{posting.account}  {posting.amount:.2f} {posting.currency}"
         if posting.total_price_amount is not None and posting.total_price_currency:
             line += f" @@ {posting.total_price_amount:.2f} {posting.total_price_currency}"
         lines.append(line)
@@ -344,8 +346,24 @@ def _expense_posting(
             original_currency,
             amount,
             currency,
+            _posting_flag(row, account),
         )
-    return Posting(account, amount, currency)
+    return _posting(row, account, amount, currency)
+
+
+def _posting(
+    row: ReviewRow,
+    account: str,
+    amount: Decimal,
+    currency: str,
+) -> Posting:
+    return Posting(account, amount, currency, flag=_posting_flag(row, account))
+
+
+def _posting_flag(row: ReviewRow, account: str) -> str:
+    if row.review_level == "manual" and account in row.reasons.flagged_accounts():
+        return "!"
+    return ""
 
 
 def _decimal(value: str) -> Decimal:

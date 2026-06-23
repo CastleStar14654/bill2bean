@@ -49,8 +49,7 @@ class CreditCardCashbackRule:
 class Config:
     default_expense_account: str
     default_income_account: str
-    manual_expense_account: str
-    manual_income_account: str
+    suspense_account: str
     cashback_income_account: str
     aa_account: str
     receivable_account: str
@@ -68,16 +67,9 @@ class Config:
         data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
         defaults = data.get("defaults", {})
         return cls(
-            default_expense_account=defaults.get("expense_account", "Expenses:Unknown"),
-            default_income_account=defaults.get("income_account", "Income:Unknown"),
-            manual_expense_account=defaults.get(
-                "manual_expense_account",
-                defaults.get("expense_account", "Expenses:Unknown"),
-            ),
-            manual_income_account=defaults.get(
-                "manual_income_account",
-                defaults.get("income_account", "Income:Unknown"),
-            ),
+            default_expense_account=defaults.get("expense_account", "Expenses:Other"),
+            default_income_account=defaults.get("income_account", "Income:Other"),
+            suspense_account=defaults.get("suspense_account", "Assets:Unknown"),
             cashback_income_account=defaults.get("cashback_income_account", "Income:Rebate:Bank"),
             aa_account=defaults.get("aa_account", "Assets:Receivables:Other"),
             receivable_account=defaults.get("receivable_account", "Assets:Receivables:Employer"),
@@ -124,7 +116,7 @@ class Config:
         account = self.account_for_text(text)
         if account:
             return account
-        return tx.source_account_hint or "Assets:Unknown"
+        return tx.source_account_hint or self.suspense_account
 
     def account_for_text(self, text: str) -> str:
         for rule in self.account_rules:

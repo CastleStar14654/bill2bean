@@ -1,8 +1,7 @@
 [defaults]
 expense_account = "Expenses:Other"
 income_account = "Income:Other"
-manual_expense_account = "Expenses:Manual"
-manual_income_account = "Income:Manual"
+suspense_account = "Assets:Unknown"
 cashback_income_account = "Income:Rebate:Bank"
 aa_account = "Assets:Receivables:Other"
 receivable_account = "Assets:Receivables:Employer"
