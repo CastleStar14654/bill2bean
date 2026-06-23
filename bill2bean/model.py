@@ -223,6 +223,56 @@ class BillTransaction:
             self.share = ""
             self.share_amount = ""
 
+    def fill_review_accounts(
+        self,
+        aa_account: str,
+        receivable_account: str,
+        share_account: str,
+    ) -> None:
+        self.aa_account = self.aa_account or aa_account
+        self.receivable_account = self.receivable_account or receivable_account
+        self.share_account = self.share_account or share_account
+
+    def apply_family_card_receivable(self, receivable_account: str) -> None:
+        self.share = self.share or "whole"
+        self.share_account = self.share_account or receivable_account
+        self.review_reason.add("family_card_receivable")
+
+    def convert_refund_to_negative_expense(self, expense_account: str) -> None:
+        self.direction = Direction.EXPENSE
+        self.amount = -self.amount
+        self.expense_account = expense_account
+        self.review_reason.add("refund_as_negative_expense")
+
+    def mark_unmatched_credit_card_repayment(self, income_account: str) -> None:
+        self.action = "post"
+        self.income_account = income_account
+        self.flag_account(income_account)
+        self.review_reason.add("unmatched_credit_card_repayment")
+
+    def mark_unmatched_repayment_transfer(self, discount_account: str) -> None:
+        self.direction = Direction.TRANSFER
+        self.action = "transfer"
+        self.expense_account = ""
+        self.review_level = ReviewLevel.MANUAL
+        self.fill_default_discount_account(discount_account)
+        self.apply_payment_discount_metadata()
+        self.review_reason.add("unmatched_credit_card_repayment_transfer")
+
+    def mark_check_transfer(
+        self,
+        target_account: str,
+        reason: str,
+        source_account: str = "",
+    ) -> None:
+        self.direction = Direction.TRANSFER
+        self.action = "transfer"
+        self.review_level = ReviewLevel.CHECK
+        if source_account:
+            self.source_account_hint = source_account
+        self.expense_account = target_account
+        self.review_reason.add(reason)
+
     def fill_default_discount_account(self, default_discount_account: str) -> None:
         self.discount_account = self.discount_account or default_discount_account
 

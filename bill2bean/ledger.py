@@ -155,100 +155,13 @@ class TransactionList:
         self.config = config
 
     def normalize(self) -> "TransactionList":
+        normalizer = TransactionNormalizer(self.config)
         for tx in self.txs:
-            tx.source_account_hint = self.config.source_account_for(tx)
-            if tx.direction == Direction.EXPENSE:
-                tx.expense_account = self.config.expense_account_for(tx)
-                tx.fill_default_discount_account(self.config.discount_income_account)
-                tx.apply_payment_discount_metadata()
-                if tx.is_family_card():
-                    tx.share = tx.share or "whole"
-                    tx.share_account = tx.share_account or self.config.family_card_receivable_account
-                    tx.review_reason.add("family_card_receivable")
-            elif tx.direction == Direction.INCOME:
-                if tx.is_refund():
-                    tx.direction = Direction.EXPENSE
-                    tx.amount = -tx.amount
-                    tx.expense_account = self.config.expense_account_for(tx)
-                    tx.review_reason.add("refund_as_negative_expense")
-                    continue
-                tx.income_account = (
-                    self.config.cashback_income_account
-                    if (
-                        tx.action == "merge_cashback"
-                        or tx.metadata.get("txn_type") == "刷卡金"
-                        or tx.metadata.get("is_credit_card_cashback") == "true"
-                    )
-                    else self.config.income_account_for(tx)
-                )
-                if tx.is_credit_card_repayment_credit():
-                    tx.action = "post"
-                    tx.income_account = self.config.default_income_account
-                    tx.flag_account(self.config.default_income_account)
-                    tx.review_reason.add("unmatched_credit_card_repayment")
-            elif tx.is_payment_platform_credit_card_repayment():
-                tx.direction = Direction.TRANSFER
-                tx.action = "transfer"
-                tx.expense_account = ""
-                tx.review_level = ReviewLevel.MANUAL
-                tx.fill_default_discount_account(self.config.discount_income_account)
-                tx.apply_payment_discount_metadata()
-                tx.review_reason.add("unmatched_credit_card_repayment_transfer")
-            elif tx.is_alipay_yuebao_transfer():
-                tx.direction = Direction.TRANSFER
-                tx.action = "transfer"
-                tx.review_level = ReviewLevel.CHECK
-                tx.source_account_hint = self._alipay_payment_method_account(tx)
-                tx.expense_account = "Assets:Current:Alipay:YuEBao"
-                tx.review_reason.add("yuebao_transfer")
-            elif tx.is_alipay_credit_repayment():
-                tx.direction = Direction.TRANSFER
-                tx.action = "transfer"
-                tx.review_level = ReviewLevel.CHECK
-                tx.source_account_hint = self._alipay_payment_method_account(tx)
-                tx.expense_account = self._alipay_credit_repayment_account(tx)
-                tx.review_reason.add("credit_repayment")
-            tx.aa_account = tx.aa_account or self.config.aa_account
-            tx.receivable_account = tx.receivable_account or self.config.receivable_account
-            tx.share_account = tx.share_account or self.config.family_card_receivable_account
-            if tx.action == "receivable":
-                tx.normalize_receivable_action()
-            reason = self.config.needs_manual_review(tx)
-            if reason:
-                tx.mark_manual(f"manual_pattern:{reason}")
-            if tx.direction == Direction.NEUTRAL:
-                tx.action = "skip"
-                if tx.review_level != ReviewLevel.MANUAL:
-                    tx.review_level = (
-                        ReviewLevel.OK
-                        if tx.is_alipay_safe_investment_neutral()
-                        else ReviewLevel.CHECK
-                    )
-                if not tx.review_reason:
-                    tx.review_reason.add("neutral_transaction")
-            if not tx.source_account_hint or tx.source_account_hint == self.config.suspense_account:
-                tx.mark_manual("unknown_source_account")
-                tx.flag_account(self.config.suspense_account)
-            if tx.direction == Direction.EXPENSE and tx.expense_account == self.config.default_expense_account:
-                tx.review_level = max(tx.review_level, ReviewLevel.CHECK)
-                tx.review_reason.add("default_expense_account")
+            normalizer.normalize(tx)
         CrossSourceMatcher(self.txs, self.config).deduplicate()
         for tx in self.txs:
-            tx.force_manual_post(
-                self.config.default_income_account,
-                self.config.default_expense_account,
-                self.config.suspense_account,
-            )
+            normalizer.force_manual_post(tx)
         return self
-
-    def _alipay_payment_method_account(self, tx: BillTransaction) -> str:
-        method = tx.metadata.get("收/付款方式", "")
-        return self.config.account_for_text(method) or tx.source_account_hint
-
-    def _alipay_credit_repayment_account(self, tx: BillTransaction) -> str:
-        if "花呗" in tx.text():
-            return "Liabilities:Credit:Alipay:Huabei"
-        return ""
 
     def write_review_csv(
         self,
@@ -263,6 +176,125 @@ class TransactionList:
             writer.writeheader()
             for row in review_row_order(rows):
                 writer.writerow(row.to_dict())
+
+
+class TransactionNormalizer:
+    def __init__(self, config: Config):
+        self.config = config
+
+    def normalize(self, tx: BillTransaction) -> None:
+        tx.source_account_hint = self.config.source_account_for(tx)
+        if self._apply_direction_specific_rules(tx):
+            return
+        self._apply_common_accounts(tx)
+        self._apply_manual_review_rules(tx)
+        self._apply_neutral_policy(tx)
+        self._apply_account_review_flags(tx)
+
+    def force_manual_post(self, tx: BillTransaction) -> None:
+        tx.force_manual_post(
+            self.config.default_income_account,
+            self.config.default_expense_account,
+            self.config.suspense_account,
+        )
+
+    def _apply_direction_specific_rules(self, tx: BillTransaction) -> bool:
+        if tx.direction == Direction.EXPENSE:
+            self._apply_expense_rules(tx)
+            return False
+        if tx.direction == Direction.INCOME:
+            return self._apply_income_rules(tx)
+        if tx.is_payment_platform_credit_card_repayment():
+            self._apply_payment_platform_repayment(tx)
+        elif tx.is_alipay_yuebao_transfer():
+            self._apply_yuebao_transfer(tx)
+        elif tx.is_alipay_credit_repayment():
+            self._apply_alipay_credit_repayment(tx)
+        return False
+
+    def _apply_expense_rules(self, tx: BillTransaction) -> None:
+        tx.expense_account = self.config.expense_account_for(tx)
+        tx.fill_default_discount_account(self.config.discount_income_account)
+        tx.apply_payment_discount_metadata()
+        if tx.is_family_card():
+            tx.apply_family_card_receivable(self.config.family_card_receivable_account)
+
+    def _apply_income_rules(self, tx: BillTransaction) -> bool:
+        if tx.is_refund():
+            tx.convert_refund_to_negative_expense(self.config.expense_account_for(tx))
+            return True
+        tx.income_account = self._income_account_for(tx)
+        if tx.is_credit_card_repayment_credit():
+            tx.mark_unmatched_credit_card_repayment(self.config.default_income_account)
+        return False
+
+    def _income_account_for(self, tx: BillTransaction) -> str:
+        if (
+            tx.action == "merge_cashback"
+            or tx.metadata.get("txn_type") == "刷卡金"
+            or tx.metadata.get("is_credit_card_cashback") == "true"
+        ):
+            return self.config.cashback_income_account
+        return self.config.income_account_for(tx)
+
+    def _apply_payment_platform_repayment(self, tx: BillTransaction) -> None:
+        tx.mark_unmatched_repayment_transfer(self.config.discount_income_account)
+
+    def _apply_yuebao_transfer(self, tx: BillTransaction) -> None:
+        tx.mark_check_transfer(
+            "Assets:Current:Alipay:YuEBao",
+            "yuebao_transfer",
+            self._alipay_payment_method_account(tx),
+        )
+
+    def _apply_alipay_credit_repayment(self, tx: BillTransaction) -> None:
+        tx.mark_check_transfer(
+            self._alipay_credit_repayment_account(tx),
+            "credit_repayment",
+            self._alipay_payment_method_account(tx),
+        )
+
+    def _apply_common_accounts(self, tx: BillTransaction) -> None:
+        tx.fill_review_accounts(
+            self.config.aa_account,
+            self.config.receivable_account,
+            self.config.family_card_receivable_account,
+        )
+        if tx.action == "receivable":
+            tx.normalize_receivable_action()
+
+    def _apply_manual_review_rules(self, tx: BillTransaction) -> None:
+        reason = self.config.needs_manual_review(tx)
+        if reason:
+            tx.mark_manual(f"manual_pattern:{reason}")
+
+    def _apply_neutral_policy(self, tx: BillTransaction) -> None:
+        if tx.direction != Direction.NEUTRAL:
+            return
+        tx.action = "skip"
+        if tx.review_level != ReviewLevel.MANUAL:
+            tx.review_level = (
+                ReviewLevel.OK if tx.is_alipay_safe_investment_neutral() else ReviewLevel.CHECK
+            )
+        if not tx.review_reason:
+            tx.review_reason.add("neutral_transaction")
+
+    def _apply_account_review_flags(self, tx: BillTransaction) -> None:
+        if not tx.source_account_hint or tx.source_account_hint == self.config.suspense_account:
+            tx.mark_manual("unknown_source_account")
+            tx.flag_account(self.config.suspense_account)
+        if tx.direction == Direction.EXPENSE and tx.expense_account == self.config.default_expense_account:
+            tx.review_level = max(tx.review_level, ReviewLevel.CHECK)
+            tx.review_reason.add("default_expense_account")
+
+    def _alipay_payment_method_account(self, tx: BillTransaction) -> str:
+        method = tx.metadata.get("收/付款方式", "")
+        return self.config.account_for_text(method) or tx.source_account_hint
+
+    def _alipay_credit_repayment_account(self, tx: BillTransaction) -> str:
+        if "花呗" in tx.text():
+            return "Liabilities:Credit:Alipay:Huabei"
+        return ""
 
 
 class CrossSourceMatcher:
