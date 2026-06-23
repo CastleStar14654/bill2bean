@@ -504,12 +504,31 @@ def merge_previous_review_rows(
         if not previous:
             merged_rows.append(row)
             continue
+        merged_rows.append(merge_previous_review_row(row, previous))
+    return merged_rows
+
+
+def merge_previous_review_row(row: ReviewRow, previous: ReviewRow) -> ReviewRow:
+    if is_review_ok(previous) or not is_review_ok(row):
         merged = ReviewRow.from_dict(row.to_dict())
         for field in REVIEW_FIELDS:
             setattr(merged, field, getattr(previous, field))
         merged.uid = row.uid
-        merged_rows.append(merged)
-    return merged_rows
+        return merged
+
+    merged = ReviewRow.from_dict(row.to_dict())
+    for field in ("notes", "tags", "links"):
+        previous_value = getattr(previous, field)
+        if previous_value:
+            setattr(merged, field, previous_value)
+    reasons = merged.reasons
+    reasons.add("regenerated_ok_over_previous_review")
+    merged.review_reason = str(reasons)
+    return merged
+
+
+def is_review_ok(row: ReviewRow) -> bool:
+    return row.review_level == ReviewLevel.OK.value
 
 
 def review_row_order(rows: list[ReviewRow]) -> list[ReviewRow]:
