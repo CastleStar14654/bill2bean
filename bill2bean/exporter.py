@@ -6,6 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 import re
 
+from .discounts import parse_deduction_discount_amount
 from .ledger import ReviewRow, read_review_csv
 
 
@@ -260,7 +261,10 @@ def _build_transaction_draft(
             postings.append(_posting(row, row["source_account"], -amount, currency))
             return _draft(row, metadata, postings)
         source_amount = amount
-        discount_amount = _decimal(row.get("discount_amount") or "0")
+        discount_amount = parse_deduction_discount_amount(
+            row.get("discount_amount", ""),
+            row.get("uid", ""),
+        )
         gross_amount = amount + discount_amount if amount >= 0 else amount - discount_amount
         aa_amount = _decimal(row.get("aa_amount") or "0")
         share_amount = _share_receivable_amount(row, amount - aa_amount)
@@ -291,7 +295,10 @@ def _build_transaction_draft(
     elif direction == "transfer":
         if not row.get("expense_account"):
             return None
-        discount_amount = _decimal(row.get("discount_amount") or "0")
+        discount_amount = parse_deduction_discount_amount(
+            row.get("discount_amount", ""),
+            row.get("uid", ""),
+        )
         target_amount = amount + discount_amount
         postings.append(_posting(row, row["expense_account"], target_amount, currency))
         if discount_amount:

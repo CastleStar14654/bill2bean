@@ -123,7 +123,7 @@ pattern = "QDII|纳斯达克"
 settlement_days = 2
 ```
 
-`investment_units`、`investment_price`、`investment_price_date` 可以在 CSV 中人工覆盖自动计算；`commission_amount` 非空时会额外写入手续费账户，默认 `commission_account`。
+`investment_units`、`investment_price`、`investment_price_date` 可以在 CSV 中人工覆盖自动计算；`commission_amount` 非空时会额外写入手续费账户，默认 `commission_account`。基金买卖都会处理 `discount_amount` 和 `commission_amount`：普通数字优惠视为抵扣，参与手续费净额 `net_fee = commission_amount - discount_amount`，买入按 `amount - net_fee` 确认份额，卖出按 `amount + net_fee` 确认份额；`discount_amount = cb:0.10` 或 `cashback:0.10` 视为另行返现，不改变确认金额，会额外写入资金账户入账和优惠收入。`cb:` 语法只支持投资交易，普通消费优惠仍使用纯数字。
 
 信用卡返现商户可以在配置中添加规则。规则只匹配商户名，可选限制卡号；不要用“境外退货”等交易类型识别返现，因为真实退货也可能使用同一交易类型。配置规则识别出的返现会作为独立收入导出到 `cashback_income_account`，适合外币卡返现和原消费日期相隔较远的情况；工行人民币“刷卡金”仍使用 `merge_cashback` 合并到对应消费。
 

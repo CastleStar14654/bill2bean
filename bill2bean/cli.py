@@ -126,54 +126,58 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    if args.accounts:
-        required_accounts = required_accounts_for_export(
+    try:
+        if args.accounts:
+            required_accounts = required_accounts_for_export(
+                rows,
+                include_sources=include_sources,
+                exclude_sources=exclude_sources,
+                start_date=args.start_date,
+                end_date=args.end_date,
+            )
+            if fund_enabled:
+                required_accounts |= required_accounts_for_fund_export(
+                    filtered_rows,
+                    args.fund_commodities,
+                    config.funds,
+                )
+            missing = sorted(required_accounts - extract_accounts(args.accounts))
+            if missing:
+                print("unknown accounts:", file=sys.stderr)
+                for account in missing:
+                    print(f"  {account}", file=sys.stderr)
+                return 2
+        normal_text = render_beancount(
             rows,
+            include_accounts=args.accounts if args.with_header else "",
+            include_files=[args.fund_commodities] if fund_enabled and args.with_header else [],
+            operating_currency=args.operating_currency if args.with_header else "",
+            investment_header_options=fund_enabled and args.with_header,
             include_sources=include_sources,
             exclude_sources=exclude_sources,
             start_date=args.start_date,
             end_date=args.end_date,
         )
+        outputs: dict[str, list[str]] = {args.output: [normal_text]}
         if fund_enabled:
-            required_accounts |= required_accounts_for_fund_export(
+            price_text = read_text_if_exists(args.price_output)
+            existing_prices = extract_price_directives(price_text)
+            fund_result = render_fund_export(
                 filtered_rows,
                 args.fund_commodities,
+                price_text,
                 config.funds,
+                fetch_prices=args.fetch_fund_prices,
+                bean_price_command=args.bean_price_command,
             )
-        missing = sorted(required_accounts - extract_accounts(args.accounts))
-        if missing:
-            print("unknown accounts:", file=sys.stderr)
-            for account in missing:
-                print(f"  {account}", file=sys.stderr)
-            return 2
-    normal_text = render_beancount(
-        rows,
-        include_accounts=args.accounts if args.with_header else "",
-        include_files=[args.fund_commodities] if fund_enabled and args.with_header else [],
-        operating_currency=args.operating_currency if args.with_header else "",
-        investment_header_options=fund_enabled and args.with_header,
-        include_sources=include_sources,
-        exclude_sources=exclude_sources,
-        start_date=args.start_date,
-        end_date=args.end_date,
-    )
-    outputs: dict[str, list[str]] = {args.output: [normal_text]}
-    if fund_enabled:
-        price_text = read_text_if_exists(args.price_output)
-        existing_prices = extract_price_directives(price_text)
-        fund_result = render_fund_export(
-            filtered_rows,
-            args.fund_commodities,
-            price_text,
-            config.funds,
-            fetch_prices=args.fetch_fund_prices,
-            bean_price_command=args.bean_price_command,
-        )
-        if fund_result.transactions:
-            outputs.setdefault(args.fund_output, []).append(fund_result.transactions)
-        if existing_prices or fund_result.prices:
-            merged_prices = merge_price_directives(existing_prices, fund_result.prices)
-            outputs.setdefault(args.price_output, []).append(merged_prices)
+            if fund_result.transactions:
+                outputs.setdefault(args.fund_output, []).append(fund_result.transactions)
+            if existing_prices or fund_result.prices:
+                merged_prices = merge_price_directives(existing_prices, fund_result.prices)
+                outputs.setdefault(args.price_output, []).append(merged_prices)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     for output, chunks in outputs.items():
         write_chunks(output, chunks)
     for output in outputs:

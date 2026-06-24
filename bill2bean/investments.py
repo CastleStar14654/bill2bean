@@ -11,6 +11,7 @@ import sys
 from tqdm import tqdm
 
 from .config import FundConfig
+from .discounts import DiscountAmount
 from .exporter import _decimal, _quote
 from .ledger import ReviewRow
 
@@ -105,6 +106,8 @@ def required_accounts_for_fund_export(
             accounts.add(fund_config.income_account_for_asset_class(trade.commodity.asset_class))
         if row.commission_amount:
             accounts.add(row.commission_account or fund_config.commission_account)
+        if DiscountAmount.parse(row.discount_amount).amount:
+            accounts.add(row.discount_account or fund_config.discount_income_account)
     return {account for account in accounts if account}
 
 
@@ -287,35 +290,74 @@ def _format_fund_trade(
     price_date = row.investment_price_date or price_date_for_trade(trade, fund_config).isoformat()
     price = _price_for_trade(row, trade.commodity, price_date, prices)
     account = fund_config.account_for_asset_class(trade.commodity.asset_class)
+    currency = row.currency or "CNY"
+    discount = DiscountAmount.parse(row.discount_amount)
+    discount_account = row.discount_account or fund_config.discount_income_account
     commission_amount = _decimal(row.commission_amount or "0")
     commission_account = row.commission_account or fund_config.commission_account
+    net_fee = commission_amount - discount.fee_deduction
+    trade_amount = amount - net_fee if trade.side == "buy" else amount + net_fee
     lines = [f"{row.posting_date} * {_quote(row.payee)} {_quote(_fund_narration(row, trade))}"]
     lines.append(f"  source: {_quote(row.source)}")
     lines.append(f"  import_id: {_quote(row.uid)}")
     lines.append(f"  price_date: {_quote(price_date)}")
     if trade.side == "buy":
-        invest_amount = amount - commission_amount
         if price:
-            units = _units(row, invest_amount, price.amount, fund_config.share_precision)
+            units = _units(row, trade_amount, price.amount, fund_config.share_precision)
             lines.append(
                 f"  {account}  {units} {trade.commodity.symbol} {{{_format_decimal(price.amount)} {price.currency}}}"
             )
         else:
-            lines.append(f"  ! {account}  {_format_decimal(invest_amount)} {row.currency or 'CNY'}")
-        if commission_amount:
-            lines.append(
-                f"  {commission_account}  {_format_decimal(commission_amount)} {row.currency or 'CNY'}"
+            lines.append(f"  ! {account}  {_format_decimal(trade_amount)} {currency}")
+        lines.extend(
+            _fee_postings(
+                discount,
+                discount_account,
+                commission_amount,
+                commission_account,
+                row.source_account,
+                currency,
             )
-        lines.append(f"  {row.source_account}  -{_format_decimal(amount)} {row.currency or 'CNY'}")
+        )
+        lines.append(f"  {row.source_account}  -{_format_decimal(amount)} {currency}")
     else:
         if price:
-            units = _units(row, amount, price.amount, fund_config.share_precision)
+            units = _units(row, trade_amount, price.amount, fund_config.share_precision)
             lines.append(f"  {account}  -{units} {trade.commodity.symbol} {{}}")
         else:
-            lines.append(f"  ! {account}  -{_format_decimal(amount)} {row.currency or 'CNY'}")
-        lines.append(f"  {row.source_account}  {_format_decimal(amount)} {row.currency or 'CNY'}")
+            lines.append(f"  ! {account}  -{_format_decimal(trade_amount)} {currency}")
+        lines.append(f"  {row.source_account}  {_format_decimal(amount)} {currency}")
+        lines.extend(
+            _fee_postings(
+                discount,
+                discount_account,
+                commission_amount,
+                commission_account,
+                row.source_account,
+                currency,
+            )
+        )
         lines.append(f"  {fund_config.income_account_for_asset_class(trade.commodity.asset_class)}")
     return "\n".join(lines) + "\n"
+
+
+def _fee_postings(
+    discount: DiscountAmount,
+    discount_account: str,
+    commission_amount: Decimal,
+    commission_account: str,
+    source_account: str,
+    currency: str,
+) -> list[str]:
+    lines: list[str] = []
+    if commission_amount:
+        lines.append(f"  {commission_account}  {_format_decimal(commission_amount)} {currency}")
+    discount_amount = discount.amount
+    if discount_amount:
+        if discount.is_cashback:
+            lines.append(f"  {source_account}  {_format_decimal(discount_amount)} {currency}")
+        lines.append(f"  {discount_account}  -{_format_decimal(discount_amount)} {currency}")
+    return lines
 
 
 def _price_for_trade(

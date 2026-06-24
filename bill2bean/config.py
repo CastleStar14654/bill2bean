@@ -59,6 +59,7 @@ class FundConfig:
     default_account: str
     default_income_account: str
     commission_account: str
+    discount_income_account: str
     default_settlement_days: int
     share_precision: int
     accounts: dict[str, str]
@@ -143,6 +144,10 @@ class Config:
                 commission_account=funds.get(
                     "commission_account",
                     "Expenses:Invest:Commissions",
+                ),
+                discount_income_account=defaults.get(
+                    "discount_income_account",
+                    "Income:Other",
                 ),
                 default_settlement_days=int(funds.get("default_settlement_days", 1)),
                 share_precision=int(funds.get("share_precision", 2)),
