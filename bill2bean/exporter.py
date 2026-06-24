@@ -333,13 +333,44 @@ def _format_transaction(draft: TransactionDraft) -> str:
     lines = [f"{draft.date} * {payee} {narration}{suffix}"]
     for key, value in draft.metadata:
         lines.append(f"  {key}: {_quote(value)}")
-    for posting in draft.postings:
+    implicit_index = _implicit_posting_index(draft.postings)
+    for index, posting in enumerate(draft.postings):
         flag = f"{posting.flag} " if posting.flag else ""
-        line = f"  {flag}{posting.account}  {posting.amount:.2f} {posting.currency}"
+        line = f"  {flag}{posting.account}"
+        if index != implicit_index:
+            line += f"  {posting.amount:.2f} {posting.currency}"
         if posting.total_price_amount is not None and posting.total_price_currency:
             line += f" @@ {posting.total_price_amount:.2f} {posting.total_price_currency}"
         lines.append(line)
     return "\n".join(lines) + "\n"
+
+
+def _implicit_posting_index(postings: list[Posting]) -> int | None:
+    if len(postings) != 2:
+        return None
+    if any(posting.total_price_amount is not None for posting in postings):
+        return None
+    if postings[0].currency != postings[1].currency:
+        return None
+
+    left, right = postings
+    left_kind = _account_kind(left.account)
+    right_kind = _account_kind(right.account)
+    if left_kind == "expenses" and right_kind in {"assets", "liabilities"}:
+        return 1
+    if right_kind == "expenses" and left_kind in {"assets", "liabilities"}:
+        return 0
+    if left_kind in {"assets", "liabilities"} and right_kind == "income":
+        return 1
+    if right_kind in {"assets", "liabilities"} and left_kind == "income":
+        return 0
+    if left_kind in {"assets", "liabilities"} and right_kind in {"assets", "liabilities"}:
+        return 1
+    return None
+
+
+def _account_kind(account: str) -> str:
+    return account.split(":", 1)[0].lower()
 
 
 def _quote(value: str) -> str:
