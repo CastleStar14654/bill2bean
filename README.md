@@ -13,6 +13,21 @@ python3 -m bill2bean.cli review -c config.toml -o review.csv \
   '中国工商银行客户对账单2026-06-18.eml'
 ```
 
+支付宝 App 导出的加密 zip 账单也可以直接传入；如果不提供密码，程序会在遇到加密 zip 时逐个询问：
+
+```bash
+python3 -m bill2bean.cli review -c config.toml -o review.csv \
+  '支付宝交易明细(20260618-20260623).zip'
+```
+
+也可以用 `--zip-password` 传入密码；注意这种方式可能留下 shell history：
+
+```bash
+python3 -m bill2bean.cli review -c config.toml -o review.csv \
+  --zip-password '123456' \
+  '支付宝交易明细(20260618-20260623).zip'
+```
+
 如果已经有上一次人工编辑过的核对表，可以在重新生成时复用旧审核结果：
 
 ```bash

@@ -10,7 +10,7 @@ from email.parser import BytesParser
 from html.parser import HTMLParser
 from pathlib import Path
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 import zipfile
 from xml.etree import ElementTree as ET
 
@@ -38,6 +38,9 @@ class AlipayCsvParser(BillParser):
 
     def parse(self, path: str | Path) -> list[BillTransaction]:
         text = Path(path).read_text(encoding="gb18030")
+        return self.parse_text(text)
+
+    def parse_text(self, text: str) -> list[BillTransaction]:
         lines = text.splitlines()
         header_index = next(i for i, line in enumerate(lines) if line.startswith("交易时间,"))
         rows = csv.DictReader(lines[header_index:])
@@ -68,6 +71,42 @@ class AlipayCsvParser(BillParser):
                 )
             )
         return txs
+
+
+class AlipayZipParser(BillParser):
+    source = "alipay"
+
+    def __init__(self, password_provider: Callable[[str | Path], str] | None = None) -> None:
+        self.password_provider = password_provider
+
+    def parse(self, path: str | Path) -> list[BillTransaction]:
+        path = Path(path)
+        with zipfile.ZipFile(path) as zf:
+            csv_infos = [
+                info
+                for info in zf.infolist()
+                if not info.is_dir() and info.filename.lower().endswith(".csv")
+            ]
+            if len(csv_infos) != 1:
+                raise ValueError(
+                    f"Alipay zip must contain exactly one CSV file: {path}"
+                )
+            info = csv_infos[0]
+            password = self._password(path) if _zip_info_is_encrypted(info) else ""
+            try:
+                with zf.open(info, pwd=password.encode() if password else None) as fh:
+                    text = fh.read().decode("gb18030")
+            except RuntimeError as exc:
+                raise ValueError(f"failed to decrypt Alipay zip: {path}") from exc
+        return AlipayCsvParser().parse_text(text)
+
+    def _password(self, path: Path) -> str:
+        if not self.password_provider:
+            raise ValueError(f"Alipay zip is encrypted and requires a password: {path}")
+        password = self.password_provider(path)
+        if not password:
+            raise ValueError(f"Alipay zip password is empty: {path}")
+        return password
 
 
 class WechatXlsxParser(BillParser):
@@ -330,11 +369,17 @@ class IcbcEmailParser(BillParser):
         return txn_type == "银联入账" and "银联转账" in merchant
 
 
-def parser_for(path: str | Path, config: Config | None = None) -> BillParser:
+def parser_for(
+    path: str | Path,
+    config: Config | None = None,
+    zip_password_provider: Callable[[str | Path], str] | None = None,
+) -> BillParser:
     name = Path(path).name
     suffix = Path(path).suffix.lower()
     if "支付宝" in name and suffix == ".csv":
         return AlipayCsvParser()
+    if "支付宝" in name and suffix == ".zip":
+        return AlipayZipParser(zip_password_provider)
     if "微信" in name and suffix == ".xlsx":
         return WechatXlsxParser()
     if "工商银行" in name and suffix == ".eml":
@@ -349,6 +394,10 @@ def _wechat_discount(note: str) -> Decimal:
     if not match:
         return Decimal("0.00")
     return _money(match.group(1))
+
+
+def _zip_info_is_encrypted(info: zipfile.ZipInfo) -> bool:
+    return bool(info.flag_bits & 0x1)
 
 
 def _xlsx_column_index(cell_ref: str) -> int:

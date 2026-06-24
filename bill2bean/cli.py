@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import sys
 
 from .config import Config
@@ -26,6 +27,10 @@ def main(argv: list[str] | None = None) -> int:
     review.add_argument(
         "--previous-review",
         help="reuse edited rows from an existing review CSV when transaction uid matches",
+    )
+    review.add_argument(
+        "--zip-password",
+        help="password for encrypted Alipay zip bills; if omitted, prompt per encrypted zip",
     )
 
     export = sub.add_parser("export", help="export reviewed CSV to Beancount")
@@ -85,10 +90,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "review":
         config = Config.load(args.config)
         txs = []
-        for filename in args.files:
-            txs.extend(parser_for(filename, config).parse(filename))
-        previous_rows = read_review_csv(args.previous_review) if args.previous_review else None
-        TransactionList(txs, config).normalize().write_review_csv(args.output, previous_rows)
+        try:
+            for filename in args.files:
+                txs.extend(
+                    parser_for(
+                        filename,
+                        config,
+                        zip_password_provider=_zip_password_provider(args.zip_password),
+                    ).parse(filename)
+                )
+            previous_rows = read_review_csv(args.previous_review) if args.previous_review else None
+            TransactionList(txs, config).normalize().write_review_csv(args.output, previous_rows)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
         print(f"wrote {args.output} with {len(txs)} rows")
         return 0
 
@@ -190,6 +205,12 @@ def parse_values(values: list[str]) -> set[str]:
     for value in values:
         result.update(part.strip() for part in value.split(",") if part.strip())
     return result
+
+
+def _zip_password_provider(password: str | None):
+    if password is not None:
+        return lambda _path: password
+    return lambda path: getpass.getpass(f"Password for {path}: ")
 
 
 def read_text_if_exists(path: str) -> str:
