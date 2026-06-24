@@ -296,8 +296,8 @@ class TransactionNormalizer:
             self.config.receivable_account,
             self.config.family_card_receivable_account,
         )
-        if tx.action == "receivable":
-            tx.normalize_receivable_action()
+        if tx.action == "reimburse":
+            tx.normalize_reimburse_action()
 
     def _apply_manual_review_rules(self, tx: BillTransaction) -> None:
         reason = self.config.needs_manual_review(tx)

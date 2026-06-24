@@ -255,10 +255,10 @@ class BillTransaction:
     def flag_account(self, account: str) -> None:
         self.mark_manual(f"flagged_account:{account}")
 
-    def normalize_receivable_action(self) -> None:
+    def normalize_reimburse_action(self) -> None:
         if self.share or self.share_amount:
             self.review_level = ReviewLevel.MANUAL
-            self.review_reason.add("receivable_overrides_share")
+            self.review_reason.add("reimburse_overrides_share")
             self.share = ""
             self.share_amount = ""
 

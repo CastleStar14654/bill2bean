@@ -227,7 +227,7 @@ def _build_transaction_draft(
     cashbacks: list[ReviewRow],
 ) -> TransactionDraft | None:
     action = (row.action or "post").strip()
-    if action in {"skip", "merge_cashback"} or action not in {"post", "receivable", "transfer"}:
+    if action in {"skip", "merge_cashback"} or action not in {"post", "reimburse", "transfer"}:
         return None
 
     amount = _decimal(row["amount"])
@@ -239,9 +239,9 @@ def _build_transaction_draft(
         metadata.append(("import_id", row.get("uid", "")))
     if row.get("notes"):
         metadata.append(("note", row["notes"]))
-    if action == "receivable":
+    if action == "reimburse":
         if row.get("share") or row.get("share_amount"):
-            metadata.append(("warning", "receivable_overrides_share"))
+            metadata.append(("warning", "reimburse_overrides_share"))
     elif row.get("share"):
         metadata.append(("share", row["share"]))
         if row.get("share_account"):
@@ -251,7 +251,7 @@ def _build_transaction_draft(
 
     direction = row.get("direction")
     if direction == "expense":
-        if action == "receivable":
+        if action == "reimburse":
             aa_amount = _decimal(row.get("aa_amount") or "0")
             reimbursable_amount = amount - aa_amount
             if reimbursable_amount:
