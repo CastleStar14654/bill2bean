@@ -278,7 +278,7 @@ class TransactionNormalizer:
 
     def _apply_yuebao_transfer(self, tx: BillTransaction) -> None:
         tx.mark_check_transfer(
-            "Assets:Current:Alipay:YuEBao",
+            self.config.alipay_yuebao_account,
             "yuebao_transfer",
             self._alipay_payment_method_account(tx),
         )
@@ -329,7 +329,7 @@ class TransactionNormalizer:
 
     def _alipay_credit_repayment_account(self, tx: BillTransaction) -> str:
         if "花呗" in tx.text():
-            return "Liabilities:Credit:Alipay:Huabei"
+            return self.config.alipay_huabei_account
         return ""
 
 

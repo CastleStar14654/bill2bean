@@ -7,6 +7,8 @@ aa_account = "Assets:Receivables:Other"
 receivable_account = "Assets:Receivables:Employer"
 family_card_receivable_account = "Assets:Receivables:Partner"
 discount_income_account = "Income:Other"
+alipay_yuebao_account = "Assets:Current:Alipay:YuEBao"
+alipay_huabei_account = "Liabilities:Credit:Alipay:Huabei"
 
 [[account_rules]]
 pattern = "工商银行信用卡\\(1234\\)|ICBC信用卡\\(1234\\)"

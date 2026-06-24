@@ -89,6 +89,8 @@ class Config:
     receivable_account: str
     family_card_receivable_account: str
     discount_income_account: str
+    alipay_yuebao_account: str
+    alipay_huabei_account: str
     account_rules: list[RegexRule]
     expense_rules: list[RegexRule]
     income_rules: list[RegexRule]
@@ -114,6 +116,14 @@ class Config:
                 "Assets:Receivables:Partner",
             ),
             discount_income_account=defaults.get("discount_income_account", "Income:Other"),
+            alipay_yuebao_account=defaults.get(
+                "alipay_yuebao_account",
+                "Assets:Current:Alipay:YuEBao",
+            ),
+            alipay_huabei_account=defaults.get(
+                "alipay_huabei_account",
+                "Liabilities:Credit:Alipay:Huabei",
+            ),
             account_rules=[
                 RegexRule(r["pattern"], r["account"]) for r in data.get("account_rules", [])
             ],

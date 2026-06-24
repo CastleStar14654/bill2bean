@@ -178,7 +178,7 @@ class _TableParser(HTMLParser):
 class IcbcEmailParser(BillParser):
     source = "icbc_credit"
 
-    def __init__(self, config: Config | None = None) -> None:
+    def __init__(self, config: Config) -> None:
         self.config = config
 
     def parse(self, path: str | Path) -> list[BillTransaction]:
@@ -206,7 +206,7 @@ class IcbcEmailParser(BillParser):
             tx = self._parse_detail_row(row, row_number, rmb_card)
             if self._is_cashback_adjustment(tx) and previous_postable:
                 tx.action = "merge_cashback"
-                tx.income_account = "Income:Cashback"
+                tx.income_account = self.config.cashback_income_account
                 if "退款" in tx.payee:
                     tx.amount = -tx.amount
                     tx.direction = Direction.INCOME
@@ -338,6 +338,8 @@ def parser_for(path: str | Path, config: Config | None = None) -> BillParser:
     if "微信" in name and suffix == ".xlsx":
         return WechatXlsxParser()
     if "工商银行" in name and suffix == ".eml":
+        if config is None:
+            raise ValueError("ICBC email parser requires config")
         return IcbcEmailParser(config)
     raise ValueError(f"cannot infer parser for {path}")
 

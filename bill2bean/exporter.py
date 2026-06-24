@@ -280,12 +280,17 @@ def _build_transaction_draft(
             postings.append(_expense_posting(row, row["expense_account"], gross_amount, currency))
         if discount_amount:
             postings.append(
-                _posting(row, row.get("discount_account") or "Income:Other", -discount_amount, currency)
+                _posting(
+                    row,
+                    _required_account(row, "discount_account"),
+                    -discount_amount,
+                    currency,
+                )
             )
         for cashback in cashbacks:
             cb_amount = _decimal(cashback["amount"])
             source_amount -= cb_amount
-            income_account = cashback.get("income_account") or "Income:Cashback"
+            income_account = _required_account(cashback, "income_account")
             income_amount = -cb_amount
             postings.append(_posting(row, income_account, income_amount, currency))
         postings.append(_posting(row, row["source_account"], -source_amount, currency))
@@ -303,7 +308,12 @@ def _build_transaction_draft(
         postings.append(_posting(row, row["expense_account"], target_amount, currency))
         if discount_amount:
             postings.append(
-                _posting(row, row.get("discount_account") or "Income:Other", -discount_amount, currency)
+                _posting(
+                    row,
+                    _required_account(row, "discount_account"),
+                    -discount_amount,
+                    currency,
+                )
             )
         postings.append(_posting(row, row["source_account"], -amount, currency))
     else:
@@ -324,6 +334,15 @@ def _draft(
         postings=postings,
         tags_links=_tags_links(row),
     )
+
+
+def _required_account(row: dict[str, str], field: str) -> str:
+    account = row.get(field, "")
+    if not account:
+        uid = row.get("uid", "")
+        suffix = f" for row {uid}" if uid else ""
+        raise ValueError(f"missing required {field}{suffix}")
+    return account
 
 
 def _format_transaction(draft: TransactionDraft) -> str:
