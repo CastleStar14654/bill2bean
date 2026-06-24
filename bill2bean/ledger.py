@@ -156,6 +156,9 @@ class ReviewRow:
     def is_skip_ok(self) -> bool:
         return self.action == "skip" and self.review_level == ReviewLevel.OK.value
 
+    def is_invest(self) -> bool:
+        return self.action == "invest"
+
     def is_skip_check_duplicate(self) -> bool:
         return (
             self.action == "skip"
@@ -556,7 +559,14 @@ def review_row_order(rows: list[ReviewRow]) -> list[ReviewRow]:
         row
         for row in ordered
         if not row.is_post_manual()
+        and not row.is_invest()
         and not row.is_skip_ok()
+        and row.uid not in duplicate_uids
+    ]
+    invest = [
+        row
+        for row in ordered
+        if row.is_invest()
         and row.uid not in duplicate_uids
     ]
     skip_ok = [row for row in ordered if row.is_skip_ok()]
@@ -575,6 +585,8 @@ def review_row_order(rows: list[ReviewRow]) -> list[ReviewRow]:
     for row in post_manual:
         emit(row)
     for row in initial:
+        emit(row)
+    for row in invest:
         emit(row)
     for row in skip_ok:
         emit(row)
