@@ -252,13 +252,15 @@ def _build_transaction_draft(
     direction = row.get("direction")
     if direction == "expense":
         if action == "reimburse":
+            source_amount = amount
             aa_amount = _decimal(row.get("aa_amount") or "0")
             reimbursable_amount = amount - aa_amount
             if reimbursable_amount:
                 postings.append(_posting(row, row["receivable_account"], reimbursable_amount, currency))
             if aa_amount:
                 postings.append(_posting(row, row["aa_account"], aa_amount, currency))
-            postings.append(_posting(row, row["source_account"], -amount, currency))
+            source_amount = _apply_cashbacks(row, cashbacks, postings, source_amount, currency)
+            postings.append(_posting(row, row["source_account"], -source_amount, currency))
             return _draft(row, metadata, postings)
         source_amount = amount
         discount_amount = parse_deduction_discount_amount(
@@ -287,12 +289,7 @@ def _build_transaction_draft(
                     currency,
                 )
             )
-        for cashback in cashbacks:
-            cb_amount = _decimal(cashback["amount"])
-            source_amount -= cb_amount
-            income_account = _required_account(cashback, "income_account")
-            income_amount = -cb_amount
-            postings.append(_posting(row, income_account, income_amount, currency))
+        source_amount = _apply_cashbacks(row, cashbacks, postings, source_amount, currency)
         postings.append(_posting(row, row["source_account"], -source_amount, currency))
     elif direction == "income":
         postings.append(_posting(row, row["source_account"], amount, currency))
@@ -343,6 +340,21 @@ def _required_account(row: dict[str, str], field: str) -> str:
         suffix = f" for row {uid}" if uid else ""
         raise ValueError(f"missing required {field}{suffix}")
     return account
+
+
+def _apply_cashbacks(
+    row: ReviewRow,
+    cashbacks: list[ReviewRow],
+    postings: list[Posting],
+    source_amount: Decimal,
+    currency: str,
+) -> Decimal:
+    for cashback in cashbacks:
+        cb_amount = _decimal(cashback["amount"])
+        source_amount -= cb_amount
+        income_account = _required_account(cashback, "income_account")
+        postings.append(_posting(row, income_account, -cb_amount, currency))
+    return source_amount
 
 
 def _format_transaction(draft: TransactionDraft) -> str:
