@@ -39,6 +39,8 @@ python3 -m bill2bean.cli review -c config.toml -o review.csv \
 
 `--previous-review` 会按 `uid` 匹配旧核对表中的交易。匹配成功时，旧 CSV 中已编辑的 action、账户、AA/share、备注、tags/links 等核对字段会覆盖本次自动生成结果；未匹配的新交易仍按当前规则生成。这样可以在信用卡出账日前用微信/支付宝账单增量更新，出账后再加入信用卡账单定稿。
 
+支付宝和微信的平台内置账户由配置中的 defaults 明确指定。代码会区分支付宝余额/余额宝、微信零钱/零钱通，并据此识别平台内部转账；如果不想在账本里区分，可以把对应账户配置成同一个 Beancount 账户，同账户内部转账会自动 `skip,ok`。
+
 编辑 `review.csv` 后导出：
 
 ```bash

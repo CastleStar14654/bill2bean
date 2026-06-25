@@ -194,6 +194,9 @@ class BillTransaction:
             and "收益发放" not in self.narration
         )
 
+    def is_platform_account_transfer(self) -> bool:
+        return self.direction == Direction.NEUTRAL and bool(self.metadata.get("target_account_hint"))
+
     def is_alipay_credit_repayment(self) -> bool:
         return (
             self.source == "alipay"
@@ -310,6 +313,11 @@ class BillTransaction:
         if source_account:
             self.source_account_hint = source_account
         self.expense_account = target_account
+        self.review_reason.add(reason)
+
+    def mark_same_account_transfer(self, reason: str) -> None:
+        self.action = "skip"
+        self.review_level = ReviewLevel.OK
         self.review_reason.add(reason)
 
     def mark_investment_trade(self, commission_account: str) -> None:

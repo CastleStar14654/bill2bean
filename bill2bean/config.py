@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 import tomllib
 
+from .accounts import is_account_name
 from .model import BillTransaction
 
 
@@ -89,8 +90,11 @@ class Config:
     receivable_account: str
     family_card_receivable_account: str
     discount_income_account: str
+    alipay_balance_account: str
     alipay_yuebao_account: str
     alipay_huabei_account: str
+    wechat_balance_account: str
+    wechat_lqt_account: str
     account_rules: list[RegexRule]
     expense_rules: list[RegexRule]
     income_rules: list[RegexRule]
@@ -116,6 +120,10 @@ class Config:
                 "Assets:Receivables:Partner",
             ),
             discount_income_account=defaults.get("discount_income_account", "Income:Other"),
+            alipay_balance_account=defaults.get(
+                "alipay_balance_account",
+                "Assets:Current:Alipay:Balance",
+            ),
             alipay_yuebao_account=defaults.get(
                 "alipay_yuebao_account",
                 "Assets:Current:Alipay:YuEBao",
@@ -123,6 +131,14 @@ class Config:
             alipay_huabei_account=defaults.get(
                 "alipay_huabei_account",
                 "Liabilities:Credit:Alipay:Huabei",
+            ),
+            wechat_balance_account=defaults.get(
+                "wechat_balance_account",
+                "Assets:Current:WeChat:Balance",
+            ),
+            wechat_lqt_account=defaults.get(
+                "wechat_lqt_account",
+                "Assets:Current:WeChat:LQT",
             ),
             account_rules=[
                 RegexRule(r["pattern"], r["account"]) for r in data.get("account_rules", [])
@@ -202,11 +218,15 @@ class Config:
         return " ".join(p for p in parts if p)
 
     def source_account_for(self, tx: BillTransaction) -> str:
+        if is_account_name(tx.source_account_hint):
+            return tx.source_account_hint
+        if tx.source_account_hint and tx.source_account_hint != "/":
+            return self.account_for_text(tx.source_account_hint) or tx.source_account_hint
         text = self.text_for(tx)
         account = self.account_for_text(text)
         if account:
             return account
-        return tx.source_account_hint or self.suspense_account
+        return self.suspense_account
 
     def account_for_text(self, text: str) -> str:
         for rule in self.account_rules:
@@ -227,6 +247,31 @@ class Config:
             if rule.matches(text):
                 return rule.account
         return self.default_income_account
+
+    def alipay_account_for_method(self, method: str) -> str:
+        method = (method or "").strip()
+        if not method or method == "/":
+            return ""
+        if method == "账户余额":
+            return self.alipay_balance_account
+        if method == "余额宝":
+            return self.alipay_yuebao_account
+        if "花呗" in method:
+            return self.alipay_huabei_account
+        return self.account_for_text(method) or method
+
+    def wechat_account_for_method(self, method: str, status: str = "") -> str:
+        method = (method or "").strip()
+        status = (status or "").strip()
+        if method == "零钱":
+            return self.wechat_balance_account
+        if method == "零钱通":
+            return self.wechat_lqt_account
+        if method == "/" and "零钱" in status:
+            return self.wechat_balance_account
+        if not method or method == "/":
+            return ""
+        return self.account_for_text(method) or method
 
     def needs_manual_review(self, tx: BillTransaction) -> str:
         text = self.manual_review_text_for(tx)

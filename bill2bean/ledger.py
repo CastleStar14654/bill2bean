@@ -6,6 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 import re
 
+from .accounts import is_account_name
 from .config import Config
 from .model import BillTransaction, Direction, ReviewLevel, ReviewReasons
 
@@ -238,7 +239,9 @@ class TransactionNormalizer:
             return False
         if tx.direction == Direction.INCOME:
             return self._apply_income_rules(tx)
-        if tx.is_payment_platform_credit_card_repayment():
+        if tx.is_platform_account_transfer():
+            self._apply_platform_account_transfer(tx)
+        elif tx.is_payment_platform_credit_card_repayment():
             self._apply_payment_platform_repayment(tx)
         elif tx.is_alipay_yuebao_transfer():
             self._apply_yuebao_transfer(tx)
@@ -276,6 +279,17 @@ class TransactionNormalizer:
     def _apply_payment_platform_repayment(self, tx: BillTransaction) -> None:
         tx.mark_unmatched_repayment_transfer(self.config.discount_income_account)
 
+    def _apply_platform_account_transfer(self, tx: BillTransaction) -> None:
+        target_account = tx.metadata.get("target_account_hint", "")
+        reason = tx.metadata.get("platform_transfer", "platform_transfer")
+        if tx.source_account_hint == target_account:
+            tx.mark_same_account_transfer("same_account_" + reason)
+            return
+        tx.mark_check_transfer(target_account, reason)
+        if not is_account_name(target_account):
+            tx.review_level = ReviewLevel.MANUAL
+            tx.review_reason.add("unknown_target_account")
+
     def _apply_yuebao_transfer(self, tx: BillTransaction) -> None:
         tx.mark_check_transfer(
             self.config.alipay_yuebao_account,
@@ -305,7 +319,7 @@ class TransactionNormalizer:
             tx.mark_manual(f"manual_pattern:{reason}")
 
     def _apply_neutral_policy(self, tx: BillTransaction) -> None:
-        if tx.direction != Direction.NEUTRAL or tx.action == "invest":
+        if tx.direction != Direction.NEUTRAL or tx.action in {"invest", "skip"}:
             return
         tx.action = "skip"
         if tx.review_level != ReviewLevel.MANUAL:
@@ -319,6 +333,8 @@ class TransactionNormalizer:
         if not tx.source_account_hint or tx.source_account_hint == self.config.suspense_account:
             tx.mark_manual("unknown_source_account")
             tx.flag_account(self.config.suspense_account)
+        elif not is_account_name(tx.source_account_hint):
+            tx.mark_manual("unknown_source_account")
         if tx.direction == Direction.EXPENSE and tx.expense_account == self.config.default_expense_account:
             tx.review_level = max(tx.review_level, ReviewLevel.CHECK)
             tx.review_reason.add("default_expense_account")
@@ -331,8 +347,6 @@ class TransactionNormalizer:
         if "花呗" in tx.text():
             return self.config.alipay_huabei_account
         return ""
-
-
 class CrossSourceMatcher:
     def __init__(self, txs: list[BillTransaction], config: Config):
         self.txs = txs

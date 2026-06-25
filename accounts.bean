@@ -2,7 +2,9 @@ option "title" "Sample Ledger"
 option "operating_currency" "CNY"
 
 2020-01-01 open Assets:Current:Bank:Checking1234 CNY, USD
+2020-01-01 open Assets:Current:Alipay:Balance CNY
 2020-01-01 open Assets:Current:Alipay:YuEBao CNY
+2020-01-01 open Assets:Current:WeChat:Balance CNY
 2020-01-01 open Assets:Current:WeChat:LQT CNY
 2020-01-01 open Assets:Invest:Alipay:Fund
 2020-01-01 open Assets:Invest:Alipay:AU9999

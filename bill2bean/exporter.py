@@ -6,6 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 import re
 
+from .accounts import account_kind
 from .discounts import parse_deduction_discount_amount
 from .ledger import ReviewRow, read_review_csv
 
@@ -385,8 +386,8 @@ def _implicit_posting_index(postings: list[Posting]) -> int | None:
         return None
 
     left, right = postings
-    left_kind = _account_kind(left.account)
-    right_kind = _account_kind(right.account)
+    left_kind = account_kind(left.account)
+    right_kind = account_kind(right.account)
     if left_kind == "expenses" and right_kind in {"assets", "liabilities"}:
         return 1
     if right_kind == "expenses" and left_kind in {"assets", "liabilities"}:
@@ -398,12 +399,6 @@ def _implicit_posting_index(postings: list[Posting]) -> int | None:
     if left_kind in {"assets", "liabilities"} and right_kind in {"assets", "liabilities"}:
         return 1
     return None
-
-
-def _account_kind(account: str) -> str:
-    return account.split(":", 1)[0].lower()
-
-
 def _quote(value: str) -> str:
     return '"' + (value or "").replace("\\", "\\\\").replace('"', '\\"') + '"'
 

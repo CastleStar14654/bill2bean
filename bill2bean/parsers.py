@@ -23,6 +23,9 @@ if TYPE_CHECKING:
 class BillParser(ABC):
     source: str
 
+    def __init__(self, config: Config) -> None:
+        self.config = config
+
     @abstractmethod
     def parse(self, path: str | Path) -> list[BillTransaction]:
         raise NotImplementedError
@@ -48,35 +51,68 @@ class AlipayCsvParser(BillParser):
         for row in rows:
             if not row.get("交易时间"):
                 continue
+            payee = (row.get("交易对方") or "").strip()
+            narration = (row.get("商品说明") or "").strip()
+            payment_method = (row.get("收/付款方式") or "").strip()
             direction = {
                 "支出": Direction.EXPENSE,
                 "收入": Direction.INCOME,
                 "不计收支": Direction.NEUTRAL,
             }.get(row.get("收/支", "").strip(), Direction.NEUTRAL)
-            if "余额宝" in (row.get("商品说明") or "") and "收益发放" in (
-                row.get("商品说明") or ""
-            ):
+            if "余额宝" in narration and "收益发放" in narration:
                 direction = Direction.INCOME
+            source_account = self.config.alipay_account_for_method(payment_method)
+            metadata = {k: (v or "").strip() for k, v in row.items() if k}
+            if payee == "余额宝" and "收益发放" in narration:
+                source_account = self.config.alipay_yuebao_account
+            elif self._is_yuebao_transfer(payee, narration):
+                source_account, target_account = self._alipay_yuebao_transfer_accounts(
+                    narration,
+                    payment_method,
+                )
+                metadata["target_account_hint"] = target_account
+                metadata["platform_transfer"] = "alipay_yuebao"
             txs.append(
                 BillTransaction(
                     source=self.source,
                     source_id=(row.get("交易订单号") or row.get("商家订单号") or "").strip(),
                     time=datetime.strptime(row["交易时间"].strip(), "%Y-%m-%d %H:%M:%S"),
-                    payee=(row.get("交易对方") or "").strip(),
-                    narration=(row.get("商品说明") or "").strip(),
+                    payee=payee,
+                    narration=narration,
                     amount=_money(row.get("金额", "0")),
                     direction=direction,
-                    source_account_hint=(row.get("收/付款方式") or "").strip(),
-                    metadata={k: (v or "").strip() for k, v in row.items() if k},
+                    source_account_hint=source_account,
+                    metadata=metadata,
                 )
             )
         return txs
+
+    def _alipay_yuebao_transfer_accounts(
+        self,
+        narration: str,
+        payment_method: str,
+    ) -> tuple[str, str]:
+        method_account = self.config.alipay_account_for_method(payment_method)
+        if "转出" in narration:
+            return self.config.alipay_yuebao_account, method_account
+        return method_account, self.config.alipay_yuebao_account
+
+    @classmethod
+    def _is_yuebao_transfer(cls, payee: str, narration: str) -> bool:
+        return (
+            payee == "余额宝" or narration.startswith("余额宝-")
+        ) and "收益发放" not in narration
 
 
 class AlipayZipParser(BillParser):
     source = "alipay"
 
-    def __init__(self, password_provider: Callable[[str | Path], str] | None = None) -> None:
+    def __init__(
+        self,
+        config: Config,
+        password_provider: Callable[[str | Path], str] | None = None,
+    ) -> None:
+        super().__init__(config)
         self.password_provider = password_provider
 
     def parse(self, path: str | Path) -> list[BillTransaction]:
@@ -98,7 +134,7 @@ class AlipayZipParser(BillParser):
                     text = fh.read().decode("gb18030")
             except RuntimeError as exc:
                 raise ValueError(f"failed to decrypt Alipay zip: {path}") from exc
-        return AlipayCsvParser().parse_text(text)
+        return AlipayCsvParser(self.config).parse_text(text)
 
     def _password(self, path: Path) -> str:
         if not self.password_provider:
@@ -128,22 +164,46 @@ class WechatXlsxParser(BillParser):
                 "中性交易": Direction.NEUTRAL,
                 "/": Direction.NEUTRAL,
             }.get(row.get("收/支", "").strip(), Direction.NEUTRAL)
+            payment_method = (row.get("支付方式") or "").strip()
+            status = (row.get("当前状态") or "").strip()
+            source_account = self.config.wechat_account_for_method(payment_method, status)
+            metadata = dict(row)
+            narration = (row.get("商品") or "").strip()
+            if self._is_lqt_transfer(row):
+                source_account, target_account = self._wechat_lqt_transfer_accounts(row)
+                metadata["target_account_hint"] = target_account
+                metadata["platform_transfer"] = "wechat_lqt"
+                if not narration or narration == "/":
+                    narration = (row.get("交易类型") or "").strip()
             tx = BillTransaction(
-                    source=self.source,
-                    source_id=(row.get("交易单号") or row.get("商户单号") or "").strip(),
-                    time=self._excel_time(row["交易时间"]),
-                    payee=(row.get("交易对方") or "").strip(),
-                    narration=(row.get("商品") or "").strip(),
-                    amount=_money(row.get("金额(元)", "0")),
-                    direction=direction,
-                    source_account_hint=(row.get("支付方式") or "").strip(),
-                    metadata=row,
-                )
-            discount = _wechat_discount(row.get("备注", ""))
+                source=self.source,
+                source_id=(row.get("交易单号") or row.get("商户单号") or "").strip(),
+                time=self._excel_time(row["交易时间"]),
+                payee=(row.get("交易对方") or "").strip(),
+                narration=narration,
+                amount=_money(row.get("金额(元)", "0")),
+                direction=direction,
+                source_account_hint=source_account,
+                metadata=metadata,
+            )
+            discount = self._discount(row.get("备注", ""))
             if discount:
                 tx.metadata["discount_amount"] = str(discount)
             txs.append(tx)
         return txs
+
+    def _wechat_lqt_transfer_accounts(self, row: dict[str, str]) -> tuple[str, str]:
+        txn_type = row.get("交易类型", "")
+        if "转入零钱通" in txn_type:
+            source_text = txn_type.split("来自", 1)[1] if "来自" in txn_type else ""
+            if source_text == "零钱":
+                source_account = self.config.wechat_balance_account
+            else:
+                source_account = self.config.account_for_text(source_text) or source_text
+            return source_account, self.config.wechat_lqt_account
+        target_text = txn_type.split("到", 1)[1] if "到" in txn_type else ""
+        target_account = self.config.account_for_text(target_text) or target_text
+        return self.config.wechat_lqt_account, target_account
 
     def _read_rows(self, path: str | Path) -> list[list[str]]:
         with zipfile.ZipFile(path) as zf:
@@ -187,6 +247,18 @@ class WechatXlsxParser(BillParser):
         serial = Decimal(value)
         return datetime(1899, 12, 30) + timedelta(days=float(serial))
 
+    @classmethod
+    def _discount(cls, note: str) -> Decimal:
+        match = re.search(r"已优惠[¥￥]?([\d.]+)", note or "")
+        if not match:
+            return Decimal("0.00")
+        return _money(match.group(1))
+
+    @classmethod
+    def _is_lqt_transfer(cls, row: dict[str, str]) -> bool:
+        txn_type = row.get("交易类型", "")
+        return "转入零钱通" in txn_type or "零钱通转出" in txn_type
+
 
 class _TableParser(HTMLParser):
     def __init__(self) -> None:
@@ -216,9 +288,6 @@ class _TableParser(HTMLParser):
 
 class IcbcEmailParser(BillParser):
     source = "icbc_credit"
-
-    def __init__(self, config: Config) -> None:
-        self.config = config
 
     def parse(self, path: str | Path) -> list[BillTransaction]:
         msg = BytesParser(policy=policy.default).parsebytes(Path(path).read_bytes())
@@ -318,7 +387,6 @@ class IcbcEmailParser(BillParser):
         )
         if (
             tx.direction == Direction.INCOME
-            and self.config
             and self.config.is_credit_card_cashback(tx)
         ):
             tx.metadata["is_credit_card_cashback"] = "true"
@@ -371,29 +439,20 @@ class IcbcEmailParser(BillParser):
 
 def parser_for(
     path: str | Path,
-    config: Config | None = None,
+    config: Config,
     zip_password_provider: Callable[[str | Path], str] | None = None,
 ) -> BillParser:
     name = Path(path).name
     suffix = Path(path).suffix.lower()
     if "支付宝" in name and suffix == ".csv":
-        return AlipayCsvParser()
+        return AlipayCsvParser(config)
     if "支付宝" in name and suffix == ".zip":
-        return AlipayZipParser(zip_password_provider)
+        return AlipayZipParser(config, zip_password_provider)
     if "微信" in name and suffix == ".xlsx":
-        return WechatXlsxParser()
+        return WechatXlsxParser(config)
     if "工商银行" in name and suffix == ".eml":
-        if config is None:
-            raise ValueError("ICBC email parser requires config")
         return IcbcEmailParser(config)
     raise ValueError(f"cannot infer parser for {path}")
-
-
-def _wechat_discount(note: str) -> Decimal:
-    match = re.search(r"已优惠[¥￥]?([\d.]+)", note or "")
-    if not match:
-        return Decimal("0.00")
-    return _money(match.group(1))
 
 
 def _zip_info_is_encrypted(info: zipfile.ZipInfo) -> bool:

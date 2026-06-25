@@ -7,8 +7,11 @@ aa_account = "Assets:Receivables:Other"
 receivable_account = "Assets:Receivables:Employer"
 family_card_receivable_account = "Assets:Receivables:Partner"
 discount_income_account = "Income:Other"
+alipay_balance_account = "Assets:Current:Alipay:Balance"
 alipay_yuebao_account = "Assets:Current:Alipay:YuEBao"
 alipay_huabei_account = "Liabilities:Credit:Alipay:Huabei"
+wechat_balance_account = "Assets:Current:WeChat:Balance"
+wechat_lqt_account = "Assets:Current:WeChat:LQT"
 
 [[account_rules]]
 pattern = "工商银行信用卡\\(1234\\)|ICBC信用卡\\(1234\\)"
@@ -21,22 +24,6 @@ account = "Liabilities:Credit:Bank:FXCard5678"
 [[account_rules]]
 pattern = "工商银行储蓄卡\\(1234\\)"
 account = "Assets:Current:Bank:Checking1234"
-
-[[account_rules]]
-pattern = "账户余额|余额宝"
-account = "Assets:Current:Alipay:YuEBao"
-
-[[account_rules]]
-pattern = "零钱通"
-account = "Assets:Current:WeChat:LQT"
-
-[[account_rules]]
-pattern = "花呗"
-account = "Liabilities:Credit:Alipay:Huabei"
-
-[[account_rules]]
-pattern = "alipay|支付宝"
-account = "Assets:Current:Alipay:YuEBao"
 
 [[expense_rules]]
 pattern = "咖啡|奶茶|饮品|甜汤|饮品店|示例饮品品牌"
