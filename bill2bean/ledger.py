@@ -185,14 +185,14 @@ class TransactionList:
 
     def _review_unmatched_investment_refunds(self) -> None:
         refunded_buys = {
-            tx.investment_refund_key()
+            _alipay_investment_refund_key(tx)
             for tx in self.txs
-            if tx.is_refunded_alipay_investment_buy()
+            if _is_refunded_alipay_investment_buy(tx)
         }
         for tx in self.txs:
-            if not tx.is_alipay_investment_buy_refund():
+            if not _is_alipay_investment_buy_refund(tx):
                 continue
-            if tx.investment_refund_key() in refunded_buys:
+            if _alipay_investment_refund_key(tx) in refunded_buys:
                 tx.review_reason.add("matched_investment_buy_refund")
                 continue
             tx.review_level = max(tx.review_level, ReviewLevel.CHECK)
@@ -243,18 +243,16 @@ class TransactionNormalizer:
             self._apply_platform_account_transfer(tx)
         elif tx.is_payment_platform_credit_card_repayment():
             self._apply_payment_platform_repayment(tx)
-        elif tx.is_alipay_yuebao_transfer():
-            self._apply_yuebao_transfer(tx)
-        elif tx.is_alipay_credit_repayment():
+        elif self._is_alipay_credit_repayment(tx):
             self._apply_alipay_credit_repayment(tx)
-        elif tx.is_alipay_investment_trade():
+        elif _is_alipay_investment_trade(tx):
             tx.mark_investment_trade(self.config.funds.commission_account)
         return False
 
     def _apply_expense_rules(self, tx: BillTransaction) -> None:
         tx.expense_account = self.config.expense_account_for(tx)
         tx.fill_default_discount_account(self.config.discount_income_account)
-        tx.apply_payment_discount_metadata()
+        self._apply_payment_discount_metadata(tx)
         if tx.is_family_card():
             tx.apply_family_card_receivable(self.config.family_card_receivable_account)
 
@@ -278,6 +276,7 @@ class TransactionNormalizer:
 
     def _apply_payment_platform_repayment(self, tx: BillTransaction) -> None:
         tx.mark_unmatched_repayment_transfer(self.config.discount_income_account)
+        self._apply_payment_discount_metadata(tx)
 
     def _apply_platform_account_transfer(self, tx: BillTransaction) -> None:
         target_account = tx.metadata.get("target_account_hint", "")
@@ -289,13 +288,6 @@ class TransactionNormalizer:
         if not is_account_name(target_account):
             tx.review_level = ReviewLevel.MANUAL
             tx.review_reason.add("unknown_target_account")
-
-    def _apply_yuebao_transfer(self, tx: BillTransaction) -> None:
-        tx.mark_check_transfer(
-            self.config.alipay_yuebao_account,
-            "yuebao_transfer",
-            self._alipay_payment_method_account(tx),
-        )
 
     def _apply_alipay_credit_repayment(self, tx: BillTransaction) -> None:
         tx.mark_check_transfer(
@@ -324,7 +316,7 @@ class TransactionNormalizer:
         tx.action = "skip"
         if tx.review_level != ReviewLevel.MANUAL:
             tx.review_level = (
-                ReviewLevel.OK if tx.is_alipay_safe_investment_neutral() else ReviewLevel.CHECK
+                ReviewLevel.OK if _is_alipay_safe_investment_neutral(tx) else ReviewLevel.CHECK
             )
         if not tx.review_reason:
             tx.review_reason.add("neutral_transaction")
@@ -347,6 +339,75 @@ class TransactionNormalizer:
         if "花呗" in tx.text():
             return self.config.alipay_huabei_account
         return ""
+
+    def _is_alipay_credit_repayment(self, tx: BillTransaction) -> bool:
+        return (
+            tx.source == "alipay"
+            and tx.direction == Direction.NEUTRAL
+            and tx.metadata.get("交易分类") == "信用借还"
+        )
+
+    def _apply_payment_discount_metadata(self, tx: BillTransaction) -> None:
+        if tx.metadata.get("discount_amount"):
+            tx.discount_amount = str(tx.metadata["discount_amount"])
+            tx.review_reason.add("payment_discount")
+        elif tx.source == "alipay" and "&" in tx.metadata.get("收/付款方式", ""):
+            tx.review_level = ReviewLevel.MANUAL
+            tx.review_reason.add("payment_discount_amount_unknown")
+
+
+def _is_alipay_safe_investment_neutral(tx: BillTransaction) -> bool:
+    text = tx.text()
+    return (
+        tx.source == "alipay"
+        and (
+            tx.metadata.get("交易分类") == "投资理财"
+            or "蚂蚁财富" in text
+            or "基金" in text
+            or "黄金ETF" in text
+        )
+        and tx.payee != "余额宝"
+    )
+
+
+def _is_alipay_investment_trade(tx: BillTransaction) -> bool:
+    if tx.source != "alipay" or tx.metadata.get("交易分类") != "投资理财":
+        return False
+    if tx.payee == "余额宝" or "余额宝-收益发放" in tx.narration:
+        return False
+    if "退款" in tx.narration or "退款" in tx.metadata.get("交易状态", ""):
+        return False
+    if "蚂蚁（杭州）基金销售有限公司" not in tx.payee:
+        return False
+    return "买入" in tx.narration or "卖出" in tx.narration
+
+
+def _is_alipay_investment_buy_refund(tx: BillTransaction) -> bool:
+    return (
+        tx.source == "alipay"
+        and "买入退款" in tx.narration
+        and "退款" in tx.metadata.get("交易状态", tx.metadata.get("交易分类", ""))
+    )
+
+
+def _is_refunded_alipay_investment_buy(tx: BillTransaction) -> bool:
+    return (
+        tx.source == "alipay"
+        and tx.metadata.get("交易分类") == "投资理财"
+        and "买入" in tx.narration
+        and "退款" in tx.metadata.get("交易状态", "")
+    )
+
+
+def _alipay_investment_refund_key(tx: BillTransaction) -> tuple[str, Decimal, str]:
+    name = tx.narration
+    for suffix in ("-买入退款", "-买入"):
+        if suffix in name:
+            name = name.split(suffix, 1)[0]
+            break
+    return (tx.date, tx.amount, name)
+
+
 class CrossSourceMatcher:
     def __init__(self, txs: list[BillTransaction], config: Config):
         self.txs = txs

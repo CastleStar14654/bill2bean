@@ -185,71 +185,8 @@ class BillTransaction:
             return "退款" in self.metadata.get("交易类型", "") or "退款" in self.metadata.get("当前状态", "")
         return False
 
-    def is_alipay_yuebao_transfer(self) -> bool:
-        return (
-            self.source == "alipay"
-            and self.direction == Direction.NEUTRAL
-            and self.metadata.get("交易分类") == "投资理财"
-            and self.payee == "余额宝"
-            and "收益发放" not in self.narration
-        )
-
     def is_platform_account_transfer(self) -> bool:
         return self.direction == Direction.NEUTRAL and bool(self.metadata.get("target_account_hint"))
-
-    def is_alipay_credit_repayment(self) -> bool:
-        return (
-            self.source == "alipay"
-            and self.direction == Direction.NEUTRAL
-            and self.metadata.get("交易分类") == "信用借还"
-        )
-
-    def is_alipay_safe_investment_neutral(self) -> bool:
-        text = self.text()
-        return (
-            self.source == "alipay"
-            and (
-                self.metadata.get("交易分类") == "投资理财"
-                or "蚂蚁财富" in text
-                or "基金" in text
-                or "黄金ETF" in text
-            )
-            and self.payee != "余额宝"
-        )
-
-    def is_alipay_investment_trade(self) -> bool:
-        if self.source != "alipay" or self.metadata.get("交易分类") != "投资理财":
-            return False
-        if self.payee == "余额宝" or "余额宝-收益发放" in self.narration:
-            return False
-        if "退款" in self.narration or "退款" in self.metadata.get("交易状态", ""):
-            return False
-        if "蚂蚁（杭州）基金销售有限公司" not in self.payee:
-            return False
-        return "买入" in self.narration or "卖出" in self.narration
-
-    def is_alipay_investment_buy_refund(self) -> bool:
-        return (
-            self.source == "alipay"
-            and "买入退款" in self.narration
-            and "退款" in self.metadata.get("交易状态", self.metadata.get("交易分类", ""))
-        )
-
-    def is_refunded_alipay_investment_buy(self) -> bool:
-        return (
-            self.source == "alipay"
-            and self.metadata.get("交易分类") == "投资理财"
-            and "买入" in self.narration
-            and "退款" in self.metadata.get("交易状态", "")
-        )
-
-    def investment_refund_key(self) -> tuple[str, Decimal, str]:
-        name = self.narration
-        for suffix in ("-买入退款", "-买入"):
-            if suffix in name:
-                name = name.split(suffix, 1)[0]
-                break
-        return (self.date, self.amount, name)
 
     def mark_manual(self, reason: str) -> None:
         self.review_level = ReviewLevel.MANUAL
@@ -298,7 +235,6 @@ class BillTransaction:
         self.expense_account = ""
         self.review_level = ReviewLevel.MANUAL
         self.fill_default_discount_account(discount_account)
-        self.apply_payment_discount_metadata()
         self.review_reason.add("unmatched_credit_card_repayment_transfer")
 
     def mark_check_transfer(
@@ -328,14 +264,6 @@ class BillTransaction:
 
     def fill_default_discount_account(self, default_discount_account: str) -> None:
         self.discount_account = self.discount_account or default_discount_account
-
-    def apply_payment_discount_metadata(self) -> None:
-        if self.metadata.get("discount_amount"):
-            self.discount_amount = str(self.metadata["discount_amount"])
-            self.review_reason.add("payment_discount")
-        elif self.source == "alipay" and "&" in self.metadata.get("收/付款方式", ""):
-            self.review_level = ReviewLevel.MANUAL
-            self.review_reason.add("payment_discount_amount_unknown")
 
     def force_manual_post(
         self,
