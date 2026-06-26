@@ -35,6 +35,7 @@ class MerchantAliasRule:
 class CreditCardCashbackRule:
     merchant_pattern: str
     card_pattern: str = ""
+    income_account: str = ""
 
     def matches(self, tx: BillTransaction) -> bool:
         if re.search(self.merchant_pattern, tx.payee, re.IGNORECASE) is None:
@@ -86,6 +87,7 @@ class Config:
     default_income_account: str
     suspense_account: str
     cashback_income_account: str
+    icbc_shuakajin_income_account: str
     aa_account: str
     reimburse_account: str
     default_share_account: str
@@ -113,6 +115,10 @@ class Config:
             default_income_account=defaults.get("income_account", "Income:Other"),
             suspense_account=defaults.get("suspense_account", "Assets:Unknown"),
             cashback_income_account=defaults.get("cashback_income_account", "Income:Rebate:Bank"),
+            icbc_shuakajin_income_account=defaults.get(
+                "icbc_shuakajin_income_account",
+                defaults.get("cashback_income_account", "Income:Rebate:Bank"),
+            ),
             aa_account=defaults.get("aa_account", "Assets:Receivables:Other"),
             reimburse_account=defaults.get("reimburse_account", "Assets:Receivables:Employer"),
             default_share_account=defaults.get(
@@ -157,6 +163,7 @@ class Config:
                 CreditCardCashbackRule(
                     r["merchant_pattern"],
                     r.get("card_pattern", ""),
+                    r.get("income_account", ""),
                 )
                 for r in data.get("credit_card_cashback_rules", [])
             ],
@@ -283,8 +290,11 @@ class Config:
     def same_merchant_text(self, left: str, right: str) -> bool:
         return any(rule.matches_pair(left, right) for rule in self.merchant_alias_rules)
 
-    def is_credit_card_cashback(self, tx: BillTransaction) -> bool:
-        return any(rule.matches(tx) for rule in self.credit_card_cashback_rules)
+    def credit_card_cashback_income_account(self, tx: BillTransaction) -> str:
+        for rule in self.credit_card_cashback_rules:
+            if rule.matches(tx):
+                return rule.income_account or self.cashback_income_account
+        return ""
 
 
 def _list_value(data: dict, list_key: str, scalar_key: str) -> list[str]:

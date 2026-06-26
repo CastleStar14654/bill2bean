@@ -122,7 +122,7 @@ python3 -m bill2bean.cli export review.csv -o imported.bean \
 
 跨账单去重默认使用日期、金额、币种、出账账户和商户文本匹配。`expense_rules` 只决定消费分类，不参与去重。
 
-信用卡返现分为两类。实时返现会合并到对应主消费，例如工行人民币“刷卡金”；非实时返现和原消费往往不相邻，例如境外刷卡活动返现，会作为单独收入导出。两类返现都会进入 `cashback_income_account`。
+信用卡返现分为两类。实时返现会合并到对应主消费，例如工行人民币“刷卡金”；非实时返现和原消费往往不相邻，例如境外刷卡活动返现，会作为单独收入导出。默认情况下，两类返现都会进入 `cashback_income_account`。工行刷卡金可以用 `icbc_shuakajin_income_account` 单独指定收入账户。
 
 非实时返现可用配置规则识别：
 
@@ -130,9 +130,10 @@ python3 -m bill2bean.cli export review.csv -o imported.bean \
 [[credit_card_cashback_rules]]
 merchant_pattern = "Visa|Rewards|Rebate"
 card_pattern = "1234"
+income_account = "Income:Rebate:Visa"
 ```
 
-规则匹配商户名，可选限制卡号。配置规则识别出的返现会作为独立收入导出，不需要修改代码。新增会合并到主消费的实时返现模式目前需要修改 parser/匹配代码；已支持的工行实时刷卡金使用 `merge_cashback` 合并到对应消费。
+规则匹配商户名，可选限制卡号，也可以用 `income_account` 指定这一类返现的收入账户；未指定时使用 `cashback_income_account`。配置规则识别出的返现会作为独立收入导出，不需要修改代码。新增会合并到主消费的实时返现模式目前需要修改 parser/匹配代码；已支持的工行实时刷卡金使用 `merge_cashback` 合并到对应消费。
 
 支付优惠通过 `discount_amount` 和 `discount_account` 处理。`review.csv` 中的 `amount` 是账单给出的实付金额；如果存在支付优惠，`discount_amount` 表示在实付金额之外额外冲减的消费金额。微信备注中的 `已优惠...` 会自动填入 `discount_amount`。支付宝 `收/付款方式` 含 `&` 时只能判断有优惠但没有金额，会标记为 `manual`，需要人工补金额。默认优惠收入账户是 `discount_income_account`。
 

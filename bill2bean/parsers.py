@@ -426,9 +426,9 @@ class IcbcEmailParser(BillParser):
         rmb_card = self._rmb_unionpay_card(detail_rows)
         for row_number, row in detail_rows:
             tx = self._parse_detail_row(row, row_number, rmb_card)
-            if self._is_cashback_adjustment(tx) and previous_postable:
+            if self._is_shuakajin(tx) and previous_postable:
                 tx.action = "merge_cashback"
-                tx.income_account = self.config.cashback_income_account
+                tx.income_account = self.config.icbc_shuakajin_income_account
                 if "退款" in tx.payee:
                     tx.amount = -tx.amount
                     tx.direction = Direction.INCOME
@@ -453,7 +453,7 @@ class IcbcEmailParser(BillParser):
                 detail_rows.append((row_number, row[:7]))
         return detail_rows
 
-    def _is_cashback_adjustment(self, tx: BillTransaction) -> bool:
+    def _is_shuakajin(self, tx: BillTransaction) -> bool:
         return tx.metadata["txn_type"] == "刷卡金" and (
             "入账" in tx.payee or "退款" in tx.payee
         )
@@ -511,11 +511,13 @@ class IcbcEmailParser(BillParser):
             review_reason=review_reason,
             metadata=metadata,
         )
-        if (
-            tx.direction == Direction.INCOME
-            and self.config.is_credit_card_cashback(tx)
-        ):
+        if tx.direction == Direction.INCOME:
+            cashback_income_account = self.config.credit_card_cashback_income_account(tx)
+        else:
+            cashback_income_account = ""
+        if cashback_income_account:
             tx.metadata["is_credit_card_cashback"] = "true"
+            tx.income_account = cashback_income_account
             tx.review_reason.add("credit_card_cashback")
         return tx
 

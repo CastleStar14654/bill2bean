@@ -3,6 +3,7 @@ expense_account = "Expenses:Other"
 income_account = "Income:Other"
 suspense_account = "Assets:Unknown"
 cashback_income_account = "Income:Rebate:Bank"
+icbc_shuakajin_income_account = "Income:Rebate:Bank"
 aa_account = "Assets:Receivables:Other"
 reimburse_account = "Assets:Receivables:Employer"
 default_share_account = "Assets:Receivables:Partner"
@@ -75,6 +76,7 @@ aliases = ["示例品牌名", "示例门店名"]
 
 [[credit_card_cashback_rules]]
 merchant_pattern = "Visa|Rewards|Rebate"
+income_account = "Income:Rebate:Bank"
 
 [funds]
 default_account = "Assets:Invest:Alipay:Fund"

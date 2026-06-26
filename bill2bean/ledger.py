@@ -255,10 +255,9 @@ class TransactionNormalizer:
     def _income_account_for(self, tx: BillTransaction) -> str:
         if (
             tx.action == "merge_cashback"
-            or tx.metadata.get("txn_type") == "刷卡金"
             or tx.metadata.get("is_credit_card_cashback") == "true"
         ):
-            return self.config.cashback_income_account
+            return tx.income_account or self.config.cashback_income_account
         return self.config.income_account_for(tx)
 
     def _apply_payment_platform_repayment(self, tx: BillTransaction) -> None:
