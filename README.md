@@ -106,7 +106,7 @@ python3 -m bill2bean.cli export review.csv -o imported.bean \
 
 - `post`：正常导出。
 - `skip`：不导出，常用于重复项或中性交易。
-- `reimburse`：公务出差等报销条目。整笔实付净额进入 `receivable_account`，默认 `Assets:Receivables:Employer`。
+- `reimburse`：公务出差等报销条目。整笔实付净额进入 CSV 行的 `receivable_account`，默认值由配置项 `reimburse_account` 设置。
 - `transfer`：账户间转账。支付平台的信用卡还款会先作为候选转账，匹配到信用卡账单还款入账后再补全目标信用卡账户。
 - `invest`：支付宝基金/黄金买入卖出。普通导出跳过，只有指定基金导出参数时才输出。
 - `merge_cashback`：工商银行刷卡金自动行，不单独导出，会合并进上一条信用卡消费。按日期或来源过滤导出时，只要父消费被导出，对应刷卡金仍会合并进去。
@@ -172,6 +172,8 @@ aliases = ["品牌名", "门店名"]
 
 微信亲属卡交易默认标记为 `share=whole`，默认账户为 `Assets:Receivables:Partner`。
 
-`action=reimburse` 用于公务报销，默认把整笔实付净额记入 `receivable_account`。如果同时填写 `aa_amount`，则 `aa_amount` 进入 `aa_account`，剩余净额进入 `receivable_account`，适合同一笔垫付中只有一部分由你本人申请报销、另一部分由同行人归还的情况。
+`share_account` 的默认值由配置项 `default_share_account` 设置。亲属卡交易只是自动使用 `share=whole` 的一种来源；这个配置项同样适用于手动填写的 `share=split`、`share=whole` 和 `share=custom`。
+
+`action=reimburse` 用于公务报销，默认把整笔实付净额记入 CSV 行的 `receivable_account`，其默认值由配置项 `reimburse_account` 设置。如果同时填写 `aa_amount`，则 `aa_amount` 进入 `aa_account`，剩余净额进入 `receivable_account`，适合同一笔垫付中只有一部分由你本人申请报销、另一部分由同行人归还的情况。
 
 `action=reimburse` 与 `share` 不应共存。如果同时填写 `share` 或 `share_amount`，会标记 `manual` 并添加 `reimburse_overrides_share`，导出时仍按公务报销处理。

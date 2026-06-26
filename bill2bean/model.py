@@ -212,9 +212,9 @@ class BillTransaction:
         self.receivable_account = self.receivable_account or receivable_account
         self.share_account = self.share_account or share_account
 
-    def apply_family_card_receivable(self, receivable_account: str) -> None:
+    def apply_family_card_share(self, share_account: str) -> None:
         self.share = self.share or "whole"
-        self.share_account = self.share_account or receivable_account
+        self.share_account = self.share_account or share_account
         self.review_reason.add("family_card_receivable")
 
     def convert_refund_to_negative_expense(self, expense_account: str) -> None:

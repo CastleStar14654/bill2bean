@@ -87,8 +87,8 @@ class Config:
     suspense_account: str
     cashback_income_account: str
     aa_account: str
-    receivable_account: str
-    family_card_receivable_account: str
+    reimburse_account: str
+    default_share_account: str
     discount_income_account: str
     alipay_balance_account: str
     alipay_yuebao_account: str
@@ -114,9 +114,9 @@ class Config:
             suspense_account=defaults.get("suspense_account", "Assets:Unknown"),
             cashback_income_account=defaults.get("cashback_income_account", "Income:Rebate:Bank"),
             aa_account=defaults.get("aa_account", "Assets:Receivables:Other"),
-            receivable_account=defaults.get("receivable_account", "Assets:Receivables:Employer"),
-            family_card_receivable_account=defaults.get(
-                "family_card_receivable_account",
+            reimburse_account=defaults.get("reimburse_account", "Assets:Receivables:Employer"),
+            default_share_account=defaults.get(
+                "default_share_account",
                 "Assets:Receivables:Partner",
             ),
             discount_income_account=defaults.get("discount_income_account", "Income:Other"),

@@ -254,7 +254,7 @@ class TransactionNormalizer:
         tx.fill_default_discount_account(self.config.discount_income_account)
         self._apply_payment_discount_metadata(tx)
         if tx.is_family_card():
-            tx.apply_family_card_receivable(self.config.family_card_receivable_account)
+            tx.apply_family_card_share(self.config.default_share_account)
 
     def _apply_income_rules(self, tx: BillTransaction) -> bool:
         if tx.is_refund():
@@ -299,8 +299,8 @@ class TransactionNormalizer:
     def _apply_common_accounts(self, tx: BillTransaction) -> None:
         tx.fill_review_accounts(
             self.config.aa_account,
-            self.config.receivable_account,
-            self.config.family_card_receivable_account,
+            self.config.reimburse_account,
+            self.config.default_share_account,
         )
         if tx.action == "reimburse":
             tx.normalize_reimburse_action()
