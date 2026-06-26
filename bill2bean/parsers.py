@@ -59,12 +59,16 @@ class AlipayCsvParser(BillParser):
                 "收入": Direction.INCOME,
                 "不计收支": Direction.NEUTRAL,
             }.get(row.get("收/支", "").strip(), Direction.NEUTRAL)
-            if "余额宝" in narration and "收益发放" in narration:
+            is_yuebao_yield = payee == "余额宝" and "收益发放" in narration
+            if is_yuebao_yield:
                 direction = Direction.INCOME
             source_account = self.config.alipay_account_for_method(payment_method)
             metadata = {k: (v or "").strip() for k, v in row.items() if k}
-            if payee == "余额宝" and "收益发放" in narration:
+            if "&" in payment_method:
+                metadata["discount_amount_unknown"] = "true"
+            if is_yuebao_yield:
                 source_account = self.config.alipay_yuebao_account
+                metadata["platform_income"] = "alipay_yuebao_yield"
             elif self._is_yuebao_transfer(payee, narration):
                 source_account, target_account = self._alipay_yuebao_transfer_accounts(
                     narration,
@@ -72,6 +76,15 @@ class AlipayCsvParser(BillParser):
                 )
                 metadata["target_account_hint"] = target_account
                 metadata["platform_transfer"] = "alipay_yuebao"
+            elif self._is_huabei_repayment(row):
+                metadata["target_account_hint"] = self.config.alipay_huabei_account
+                metadata["platform_transfer"] = "alipay_huabei_repayment"
+            if self._is_investment_buy_refund(row):
+                metadata["investment_buy_refund"] = "true"
+            elif self._is_investment_trade(row):
+                metadata["investment_trade"] = "true"
+            elif self._is_safe_neutral_investment(row, payee):
+                metadata["safe_neutral_skip"] = "true"
             txs.append(
                 BillTransaction(
                     source=self.source,
@@ -102,6 +115,57 @@ class AlipayCsvParser(BillParser):
         return (
             payee == "余额宝" or narration.startswith("余额宝-")
         ) and "收益发放" not in narration
+
+    @classmethod
+    def _is_huabei_repayment(cls, row: dict[str, str]) -> bool:
+        if (row.get("交易分类") or "").strip() != "信用借还":
+            return False
+        text = " ".join(
+            [
+                row.get("交易对方") or "",
+                row.get("商品说明") or "",
+            ]
+        )
+        return "花呗" in text
+
+    @classmethod
+    def _is_investment_buy_refund(cls, row: dict[str, str]) -> bool:
+        narration = row.get("商品说明") or ""
+        status = row.get("交易状态") or ""
+        return "买入退款" in narration and "退款成功" in status
+
+    @classmethod
+    def _is_investment_trade(cls, row: dict[str, str]) -> bool:
+        payee = row.get("交易对方") or ""
+        narration = row.get("商品说明") or ""
+        status = row.get("交易状态") or ""
+        if (row.get("交易分类") or "").strip() != "投资理财":
+            return False
+        if payee == "余额宝" or "余额宝-收益发放" in narration:
+            return False
+        if "退款" in narration or "退款" in status:
+            return False
+        if "蚂蚁（杭州）基金销售有限公司" not in payee:
+            return False
+        return "买入" in narration or "卖出" in narration
+
+    @classmethod
+    def _is_safe_neutral_investment(cls, row: dict[str, str], payee: str) -> bool:
+        if payee == "余额宝":
+            return False
+        text = " ".join(
+            [
+                row.get("交易对方") or "",
+                row.get("商品说明") or "",
+                str(row),
+            ]
+        )
+        return (
+            (row.get("交易分类") or "").strip() == "投资理财"
+            or "蚂蚁财富" in text
+            or "基金" in text
+            or "黄金ETF" in text
+        )
 
 
 class AlipayZipParser(BillParser):
