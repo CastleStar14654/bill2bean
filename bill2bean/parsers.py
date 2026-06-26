@@ -38,6 +38,11 @@ def _money(value: str) -> Decimal:
 
 class AlipayCsvParser(BillParser):
     source = "alipay"
+    direction_map = {
+        "支出": Direction.EXPENSE,
+        "收入": Direction.INCOME,
+        "不计收支": Direction.NEUTRAL,
+    }
 
     def parse(self, path: str | Path) -> list[BillTransaction]:
         text = Path(path).read_text(encoding="gb18030")
@@ -51,54 +56,81 @@ class AlipayCsvParser(BillParser):
         for row in rows:
             if not row.get("交易时间"):
                 continue
-            payee = (row.get("交易对方") or "").strip()
-            narration = (row.get("商品说明") or "").strip()
-            payment_method = (row.get("收/付款方式") or "").strip()
-            direction = {
-                "支出": Direction.EXPENSE,
-                "收入": Direction.INCOME,
-                "不计收支": Direction.NEUTRAL,
-            }.get(row.get("收/支", "").strip(), Direction.NEUTRAL)
-            is_yuebao_yield = payee == "余额宝" and "收益发放" in narration
-            if is_yuebao_yield:
-                direction = Direction.INCOME
-            source_account = self.config.alipay_account_for_method(payment_method)
-            metadata = {k: (v or "").strip() for k, v in row.items() if k}
-            if "&" in payment_method:
-                metadata["discount_amount_unknown"] = "true"
-            if is_yuebao_yield:
-                source_account = self.config.alipay_yuebao_account
-                metadata["platform_income"] = "alipay_yuebao_yield"
-            elif self._is_yuebao_transfer(payee, narration):
-                source_account, target_account = self._alipay_yuebao_transfer_accounts(
-                    narration,
-                    payment_method,
-                )
-                metadata["target_account_hint"] = target_account
-                metadata["platform_transfer"] = "alipay_yuebao"
-            elif self._is_huabei_repayment(row):
-                metadata["target_account_hint"] = self.config.alipay_huabei_account
-                metadata["platform_transfer"] = "alipay_huabei_repayment"
-            if self._is_investment_buy_refund(row):
-                metadata["investment_buy_refund"] = "true"
-            elif self._is_investment_trade(row):
-                metadata["investment_trade"] = "true"
-            elif self._is_safe_neutral_investment(row, payee):
-                metadata["safe_neutral_skip"] = "true"
-            txs.append(
-                BillTransaction(
-                    source=self.source,
-                    source_id=(row.get("交易订单号") or row.get("商家订单号") or "").strip(),
-                    time=datetime.strptime(row["交易时间"].strip(), "%Y-%m-%d %H:%M:%S"),
-                    payee=payee,
-                    narration=narration,
-                    amount=_money(row.get("金额", "0")),
-                    direction=direction,
-                    source_account_hint=source_account,
-                    metadata=metadata,
-                )
-            )
+            txs.append(self._parse_row(row))
         return txs
+
+    def _parse_row(self, row: dict[str, str]) -> BillTransaction:
+        payee = (row.get("交易对方") or "").strip()
+        narration = (row.get("商品说明") or "").strip()
+        payment_method = (row.get("收/付款方式") or "").strip()
+        direction = self._direction(row, payee, narration)
+        source_account = self.config.alipay_account_for_method(payment_method)
+        metadata = {k: (v or "").strip() for k, v in row.items() if k}
+        if "&" in payment_method:
+            metadata["discount_amount_unknown"] = "true"
+        source_account = self._apply_account_metadata(
+            row,
+            payee,
+            narration,
+            payment_method,
+            source_account,
+            metadata,
+        )
+        self._apply_investment_metadata(row, payee, metadata)
+        return BillTransaction(
+            source=self.source,
+            source_id=(row.get("交易订单号") or row.get("商家订单号") or "").strip(),
+            time=datetime.strptime(row["交易时间"].strip(), "%Y-%m-%d %H:%M:%S"),
+            payee=payee,
+            narration=narration,
+            amount=_money(row.get("金额", "0")),
+            direction=direction,
+            source_account_hint=source_account,
+            metadata=metadata,
+        )
+
+    def _direction(self, row: dict[str, str], payee: str, narration: str) -> Direction:
+        if self._is_yuebao_yield(payee, narration):
+            return Direction.INCOME
+        return self.direction_map.get(row.get("收/支", "").strip(), Direction.NEUTRAL)
+
+    def _apply_account_metadata(
+        self,
+        row: dict[str, str],
+        payee: str,
+        narration: str,
+        payment_method: str,
+        source_account: str,
+        metadata: dict[str, str],
+    ) -> str:
+        if self._is_yuebao_yield(payee, narration):
+            metadata["platform_income"] = "alipay_yuebao_yield"
+            return self.config.alipay_yuebao_account
+        if self._is_yuebao_transfer(payee, narration):
+            source_account, target_account = self._alipay_yuebao_transfer_accounts(
+                narration,
+                payment_method,
+            )
+            metadata["target_account_hint"] = target_account
+            metadata["platform_transfer"] = "alipay_yuebao"
+            return source_account
+        if self._is_huabei_repayment(row):
+            metadata["target_account_hint"] = self.config.alipay_huabei_account
+            metadata["platform_transfer"] = "alipay_huabei_repayment"
+        return source_account
+
+    def _apply_investment_metadata(
+        self,
+        row: dict[str, str],
+        payee: str,
+        metadata: dict[str, str],
+    ) -> None:
+        if self._is_investment_buy_refund(row):
+            metadata["investment_buy_refund"] = "true"
+        elif self._is_investment_trade(row):
+            metadata["investment_trade"] = "true"
+        elif self._is_safe_neutral_investment(row, payee):
+            metadata["safe_neutral_skip"] = "true"
 
     def _alipay_yuebao_transfer_accounts(
         self,
@@ -115,6 +147,10 @@ class AlipayCsvParser(BillParser):
         return (
             payee == "余额宝" or narration.startswith("余额宝-")
         ) and "收益发放" not in narration
+
+    @classmethod
+    def _is_yuebao_yield(cls, payee: str, narration: str) -> bool:
+        return payee == "余额宝" and "收益发放" in narration
 
     @classmethod
     def _is_huabei_repayment(cls, row: dict[str, str]) -> bool:
@@ -212,6 +248,12 @@ class AlipayZipParser(BillParser):
 class WechatXlsxParser(BillParser):
     source = "wechat"
     ns = {"a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    direction_map = {
+        "支出": Direction.EXPENSE,
+        "收入": Direction.INCOME,
+        "中性交易": Direction.NEUTRAL,
+        "/": Direction.NEUTRAL,
+    }
 
     def parse(self, path: str | Path) -> list[BillTransaction]:
         rows = self._read_rows(path)
@@ -222,39 +264,39 @@ class WechatXlsxParser(BillParser):
             if not values or not values[0]:
                 continue
             row = dict(zip(headers, values))
-            direction = {
-                "支出": Direction.EXPENSE,
-                "收入": Direction.INCOME,
-                "中性交易": Direction.NEUTRAL,
-                "/": Direction.NEUTRAL,
-            }.get(row.get("收/支", "").strip(), Direction.NEUTRAL)
-            payment_method = (row.get("支付方式") or "").strip()
-            status = (row.get("当前状态") or "").strip()
-            source_account = self.config.wechat_account_for_method(payment_method, status)
-            metadata = dict(row)
-            narration = (row.get("商品") or "").strip()
-            if self._is_lqt_transfer(row):
-                source_account, target_account = self._wechat_lqt_transfer_accounts(row)
-                metadata["target_account_hint"] = target_account
-                metadata["platform_transfer"] = "wechat_lqt"
-                if not narration or narration == "/":
-                    narration = (row.get("交易类型") or "").strip()
-            tx = BillTransaction(
-                source=self.source,
-                source_id=(row.get("交易单号") or row.get("商户单号") or "").strip(),
-                time=self._excel_time(row["交易时间"]),
-                payee=(row.get("交易对方") or "").strip(),
-                narration=narration,
-                amount=_money(row.get("金额(元)", "0")),
-                direction=direction,
-                source_account_hint=source_account,
-                metadata=metadata,
-            )
-            discount = self._discount(row.get("备注", ""))
-            if discount:
-                tx.metadata["discount_amount"] = str(discount)
-            txs.append(tx)
+            txs.append(self._parse_row(row))
         return txs
+
+    def _parse_row(self, row: dict[str, str]) -> BillTransaction:
+        payment_method = (row.get("支付方式") or "").strip()
+        status = (row.get("当前状态") or "").strip()
+        source_account = self.config.wechat_account_for_method(payment_method, status)
+        metadata = dict(row)
+        narration = (row.get("商品") or "").strip()
+        if self._is_lqt_transfer(row):
+            source_account, target_account = self._wechat_lqt_transfer_accounts(row)
+            metadata["target_account_hint"] = target_account
+            metadata["platform_transfer"] = "wechat_lqt"
+            if not narration or narration == "/":
+                narration = (row.get("交易类型") or "").strip()
+        tx = BillTransaction(
+            source=self.source,
+            source_id=(row.get("交易单号") or row.get("商户单号") or "").strip(),
+            time=self._excel_time(row["交易时间"]),
+            payee=(row.get("交易对方") or "").strip(),
+            narration=narration,
+            amount=_money(row.get("金额(元)", "0")),
+            direction=self._direction(row),
+            source_account_hint=source_account,
+            metadata=metadata,
+        )
+        discount = self._discount(row.get("备注", ""))
+        if discount:
+            tx.metadata["discount_amount"] = str(discount)
+        return tx
+
+    def _direction(self, row: dict[str, str]) -> Direction:
+        return self.direction_map.get(row.get("收/支", "").strip(), Direction.NEUTRAL)
 
     def _wechat_lqt_transfer_accounts(self, row: dict[str, str]) -> tuple[str, str]:
         txn_type = row.get("交易类型", "")
@@ -352,6 +394,14 @@ class _TableParser(HTMLParser):
 
 class IcbcEmailParser(BillParser):
     source = "icbc_credit"
+    detail_table_markers = (
+        "人民币(本位币) 交 易 明 细",
+        "外 币 交 易 明 细",
+    )
+    flow_direction_map = {
+        "支出": Direction.EXPENSE,
+        "存入": Direction.INCOME,
+    }
 
     def parse(self, path: str | Path) -> list[BillTransaction]:
         msg = BytesParser(policy=policy.default).parsebytes(Path(path).read_bytes())
@@ -363,16 +413,8 @@ class IcbcEmailParser(BillParser):
         parser = _TableParser()
         parser.feed(html)
         txs: list[BillTransaction] = []
-        in_details = False
         previous_postable: BillTransaction | None = None
-        detail_rows: list[tuple[int, list[str]]] = []
-        for row_number, row in enumerate(parser.rows, start=1):
-            row_text = " ".join(row)
-            if "人民币(本位币) 交 易 明 细" in row_text or "外 币 交 易 明 细" in row_text:
-                in_details = True
-                continue
-            if in_details and len(row) >= 7 and re.fullmatch(r"\d{4}", row[0]):
-                detail_rows.append((row_number, row[:7]))
+        detail_rows = self._detail_rows(parser.rows)
         rmb_card = self._rmb_unionpay_card(detail_rows)
         for row_number, row in detail_rows:
             tx = self._parse_detail_row(row, row_number, rmb_card)
@@ -390,6 +432,18 @@ class IcbcEmailParser(BillParser):
                 previous_postable = tx
             txs.append(tx)
         return txs
+
+    def _detail_rows(self, rows: list[list[str]]) -> list[tuple[int, list[str]]]:
+        in_details = False
+        detail_rows: list[tuple[int, list[str]]] = []
+        for row_number, row in enumerate(rows, start=1):
+            row_text = " ".join(row)
+            if any(marker in row_text for marker in self.detail_table_markers):
+                in_details = True
+                continue
+            if in_details and len(row) >= 7 and re.fullmatch(r"\d{4}", row[0]):
+                detail_rows.append((row_number, row[:7]))
+        return detail_rows
 
     def _is_cashback_adjustment(self, tx: BillTransaction) -> bool:
         return tx.metadata["txn_type"] == "刷卡金" and (
@@ -429,7 +483,7 @@ class IcbcEmailParser(BillParser):
             if txn_type != "信用卡还款":
                 metadata["original_txn_type"] = txn_type
                 metadata["txn_type"] = "信用卡还款"
-        direction = Direction.EXPENSE if flow == "支出" else Direction.INCOME
+        direction = self.flow_direction_map.get(flow, Direction.INCOME)
         review_level = ReviewLevel.OK
         review_reason = ""
         if "财付通(银联云闪付)" in merchant:
