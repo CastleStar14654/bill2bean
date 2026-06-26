@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 
 
 class BillParser(ABC):
+    """Convert a bill file to transactions plus normalizer-facing metadata facts."""
+
     source: str
 
     def __init__(self, config: Config) -> None:
@@ -37,6 +39,8 @@ def _money(value: str) -> Decimal:
 
 
 class AlipayCsvParser(BillParser):
+    """Parse Alipay rows and annotate source-specific facts for normalization."""
+
     source = "alipay"
     direction_map = {
         "支出": Direction.EXPENSE,
@@ -246,6 +250,8 @@ class AlipayZipParser(BillParser):
 
 
 class WechatXlsxParser(BillParser):
+    """Parse WeChat XLSX rows and expose platform transfers as generic metadata."""
+
     source = "wechat"
     ns = {"a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
     direction_map = {
@@ -393,6 +399,8 @@ class _TableParser(HTMLParser):
 
 
 class IcbcEmailParser(BillParser):
+    """Parse ICBC credit-card statement emails into posted card transactions."""
+
     source = "icbc_credit"
     detail_table_markers = (
         "人民币(本位币) 交 易 明 细",
