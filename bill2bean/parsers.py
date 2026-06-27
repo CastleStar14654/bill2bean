@@ -94,7 +94,7 @@ class AlipayCsvParser(BillParser):
         )
 
     def _direction(self, row: dict[str, str], payee: str, narration: str) -> Direction:
-        if self._is_yuebao_yield(payee, narration):
+        if self._is_yuebao_yield(narration):
             return Direction.INCOME
         return self.direction_map.get(row.get("收/支", "").strip(), Direction.NEUTRAL)
 
@@ -107,7 +107,7 @@ class AlipayCsvParser(BillParser):
         source_account: str,
         metadata: dict[str, str],
     ) -> str:
-        if self._is_yuebao_yield(payee, narration):
+        if self._is_yuebao_yield(narration):
             metadata["platform_income"] = "alipay_yuebao_yield"
             return self.config.alipay_yuebao_account
         if self._is_yuebao_transfer(payee, narration):
@@ -153,8 +153,8 @@ class AlipayCsvParser(BillParser):
         ) and "收益发放" not in narration
 
     @classmethod
-    def _is_yuebao_yield(cls, payee: str, narration: str) -> bool:
-        return payee == "余额宝" and "收益发放" in narration
+    def _is_yuebao_yield(cls, narration: str) -> bool:
+        return narration.startswith("余额宝-") and narration.endswith("-收益发放")
 
     @classmethod
     def _is_huabei_repayment(cls, row: dict[str, str]) -> bool:
