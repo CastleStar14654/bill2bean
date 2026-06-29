@@ -68,12 +68,13 @@ def render_fund_export(
         for trade in [_fund_trade_for_row(row, commodities)]
         if trade is not None
     ]
-    required_dates = sorted({price_date_for_trade(trade, fund_config) for trade in trades})
+    existing_prices = parse_prices(price_text)
+    missing_dates = missing_price_dates(trades, fund_config, existing_prices)
     fetched_prices = ""
-    if fetch_prices and required_dates:
+    if fetch_prices and missing_dates:
         fetched_prices = fetch_price_directives(
             commodities_path,
-            required_dates,
+            missing_dates,
             bean_price_command=bean_price_command,
         )
     prices = parse_prices("\n".join(part for part in [price_text, fetched_prices] if part))
@@ -177,6 +178,24 @@ def merge_price_directives(*texts: str) -> str:
     return "\n".join(lines).rstrip() + "\n" if lines else ""
 
 
+def missing_price_dates(
+    trades: list[FundTrade],
+    fund_config: FundConfig,
+    existing_prices: dict[tuple[str, str], Price],
+) -> list[date]:
+    required_symbols_by_date: dict[date, set[str]] = {}
+    for trade in trades:
+        if trade.row.investment_price:
+            continue
+        price_date = _price_date_for_trade(trade, fund_config)
+        required_symbols_by_date.setdefault(price_date, set()).add(trade.commodity.symbol)
+    return sorted(
+        price_date
+        for price_date, symbols in required_symbols_by_date.items()
+        if any((price_date.isoformat(), symbol) not in existing_prices for symbol in symbols)
+    )
+
+
 def fetch_price_directives(
     commodities_path: str | Path,
     price_dates: list[date],
@@ -265,6 +284,12 @@ def price_date_for_trade(trade: FundTrade, fund_config: FundConfig) -> date:
     return subtract_business_days(settlement_anchor, settlement_days)
 
 
+def _price_date_for_trade(trade: FundTrade, fund_config: FundConfig) -> date:
+    if trade.row.investment_price_date:
+        return date.fromisoformat(trade.row.investment_price_date)
+    return price_date_for_trade(trade, fund_config)
+
+
 def _fund_trade_for_row(
     row: ReviewRow,
     commodities: list[InvestmentCommodity],
@@ -287,7 +312,7 @@ def _format_fund_trade(
 ) -> str:
     row = trade.row
     amount = _decimal(row.amount)
-    price_date = row.investment_price_date or price_date_for_trade(trade, fund_config).isoformat()
+    price_date = _price_date_for_trade(trade, fund_config).isoformat()
     price = _price_for_trade(row, trade.commodity, price_date, prices)
     account = fund_config.account_for_asset_class(trade.commodity.asset_class)
     currency = row.currency or "CNY"

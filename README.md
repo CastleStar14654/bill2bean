@@ -154,7 +154,7 @@ python3 -m bill2bean.cli export review.csv -o imported.bean \
 
 `--fund-output` 和 `--price-output` 可以显式给出文件名；如果选项后不跟参数，则使用 `-o` 的主输出文件。程序会先合并内容再写入，每个目标文件只写一次。
 
-默认只读取 `--price-output` 中已有的 `price` 指令；加 `--fetch-fund-prices` 才会调用 `bean-price -i -c` 抓取所需日期价格。启用基金导出且使用 `--with-header` 时，文件头还会 include `--fund-commodities`，并写入：
+默认只读取 `--price-output` 中已有的 `price` 指令；加 `--fetch-fund-prices` 才会调用 `bean-price -i -c` 抓取所需日期价格。已有文件中已覆盖本次交易所需基金价格的日期会跳过，不会重复联网抓取。启用基金导出且使用 `--with-header` 时，文件头还会 include `--fund-commodities`，并写入：
 
 ```beancount
 option "booking_method" "FIFO"
