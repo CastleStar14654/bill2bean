@@ -30,7 +30,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     review.add_argument(
         "--zip-password",
-        help="password for encrypted Alipay zip bills; if omitted, prompt per encrypted zip",
+        help="password for encrypted Alipay or WeChat zip bills; if omitted, prompt per encrypted zip",
     )
 
     export = sub.add_parser("export", help="export reviewed CSV to Beancount")

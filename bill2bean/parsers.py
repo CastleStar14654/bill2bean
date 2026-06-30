@@ -8,6 +8,7 @@ from decimal import Decimal
 from email import policy
 from email.parser import BytesParser
 from html.parser import HTMLParser
+from io import BytesIO
 from pathlib import Path
 import re
 from typing import TYPE_CHECKING, Callable
@@ -51,6 +52,9 @@ class AlipayCsvParser(BillParser):
     def parse(self, path: str | Path) -> list[BillTransaction]:
         text = Path(path).read_text(encoding="gb18030")
         return self.parse_text(text)
+
+    def parse_bytes(self, data: bytes) -> list[BillTransaction]:
+        return self.parse_text(data.decode("gb18030"))
 
     def parse_text(self, text: str) -> list[BillTransaction]:
         lines = text.splitlines()
@@ -208,44 +212,55 @@ class AlipayCsvParser(BillParser):
         )
 
 
-class AlipayZipParser(BillParser):
-    source = "alipay"
+class ZipParser(BillParser):
+    source = "zip"
 
     def __init__(
         self,
         config: Config,
+        inner_parser: type[BillParser],
+        member_suffixes: tuple[str, ...],
+        label: str,
         password_provider: Callable[[str | Path], str] | None = None,
     ) -> None:
         super().__init__(config)
+        self.inner_parser = inner_parser
+        self.member_suffixes = member_suffixes
+        self.label = label
         self.password_provider = password_provider
 
     def parse(self, path: str | Path) -> list[BillTransaction]:
         path = Path(path)
         with zipfile.ZipFile(path) as zf:
-            csv_infos = [
+            member_infos = [
                 info
                 for info in zf.infolist()
-                if not info.is_dir() and info.filename.lower().endswith(".csv")
+                if not info.is_dir()
+                and info.filename.lower().endswith(self.member_suffixes)
             ]
-            if len(csv_infos) != 1:
+            if len(member_infos) != 1:
                 raise ValueError(
-                    f"Alipay zip must contain exactly one CSV file: {path}"
+                    f"{self.label} must contain exactly one "
+                    f"{'/'.join(self.member_suffixes)} file: {path}"
                 )
-            info = csv_infos[0]
+            info = member_infos[0]
             password = self._password(path) if _zip_info_is_encrypted(info) else ""
             try:
                 with zf.open(info, pwd=password.encode() if password else None) as fh:
-                    text = fh.read().decode("gb18030")
+                    data = fh.read()
             except RuntimeError as exc:
-                raise ValueError(f"failed to decrypt Alipay zip: {path}") from exc
-        return AlipayCsvParser(self.config).parse_text(text)
+                raise ValueError(f"failed to decrypt {self.label}: {path}") from exc
+        parser = self.inner_parser(self.config)
+        if not hasattr(parser, "parse_bytes"):
+            raise ValueError(f"{self.label} inner parser does not support zip bytes")
+        return parser.parse_bytes(data)  # type: ignore[attr-defined]
 
     def _password(self, path: Path) -> str:
         if not self.password_provider:
-            raise ValueError(f"Alipay zip is encrypted and requires a password: {path}")
+            raise ValueError(f"{self.label} is encrypted and requires a password: {path}")
         password = self.password_provider(path)
         if not password:
-            raise ValueError(f"Alipay zip password is empty: {path}")
+            raise ValueError(f"{self.label} password is empty: {path}")
         return password
 
 
@@ -263,6 +278,13 @@ class WechatXlsxParser(BillParser):
 
     def parse(self, path: str | Path) -> list[BillTransaction]:
         rows = self._read_rows(path)
+        return self.parse_rows(rows)
+
+    def parse_bytes(self, data: bytes) -> list[BillTransaction]:
+        with zipfile.ZipFile(BytesIO(data)) as zf:
+            return self.parse_rows(self._read_rows_from_zip(zf))
+
+    def parse_rows(self, rows: list[list[str]]) -> list[BillTransaction]:
         header_index = next(i for i, row in enumerate(rows) if row and row[0] == "交易时间")
         headers = rows[header_index]
         txs: list[BillTransaction] = []
@@ -319,30 +341,33 @@ class WechatXlsxParser(BillParser):
 
     def _read_rows(self, path: str | Path) -> list[list[str]]:
         with zipfile.ZipFile(path) as zf:
-            shared = self._shared_strings(zf)
-            sheet_name = next(n for n in zf.namelist() if n.startswith("xl/worksheets/sheet"))
-            root = ET.fromstring(zf.read(sheet_name))
-            rows: list[list[str]] = []
-            for row_node in root.findall(".//a:row", self.ns):
-                values = []
-                for cell in row_node.findall("a:c", self.ns):
-                    ref = cell.attrib.get("r", "")
-                    if ref:
-                        column = _xlsx_column_index(ref)
-                        while len(values) < column:
-                            values.append("")
-                    value_node = cell.find("a:v", self.ns)
-                    raw = value_node.text if value_node is not None else ""
-                    if cell.attrib.get("t") == "s" and raw:
-                        values.append(shared[int(raw)])
-                    elif cell.attrib.get("t") == "inlineStr":
-                        values.append(
-                            "".join(t.text or "" for t in cell.findall(".//a:t", self.ns))
-                        )
-                    else:
-                        values.append(raw or "")
-                rows.append(values)
-            return rows
+            return self._read_rows_from_zip(zf)
+
+    def _read_rows_from_zip(self, zf: zipfile.ZipFile) -> list[list[str]]:
+        shared = self._shared_strings(zf)
+        sheet_name = next(n for n in zf.namelist() if n.startswith("xl/worksheets/sheet"))
+        root = ET.fromstring(zf.read(sheet_name))
+        rows: list[list[str]] = []
+        for row_node in root.findall(".//a:row", self.ns):
+            values = []
+            for cell in row_node.findall("a:c", self.ns):
+                ref = cell.attrib.get("r", "")
+                if ref:
+                    column = _xlsx_column_index(ref)
+                    while len(values) < column:
+                        values.append("")
+                value_node = cell.find("a:v", self.ns)
+                raw = value_node.text if value_node is not None else ""
+                if cell.attrib.get("t") == "s" and raw:
+                    values.append(shared[int(raw)])
+                elif cell.attrib.get("t") == "inlineStr":
+                    values.append(
+                        "".join(t.text or "" for t in cell.findall(".//a:t", self.ns))
+                    )
+                else:
+                    values.append(raw or "")
+            rows.append(values)
+        return rows
 
     def _shared_strings(self, zf: zipfile.ZipFile) -> list[str]:
         if "xl/sharedStrings.xml" not in zf.namelist():
@@ -575,9 +600,23 @@ def parser_for(
     if "支付宝" in name and suffix == ".csv":
         return AlipayCsvParser(config)
     if "支付宝" in name and suffix == ".zip":
-        return AlipayZipParser(config, zip_password_provider)
+        return ZipParser(
+            config,
+            AlipayCsvParser,
+            (".csv",),
+            "Alipay zip",
+            zip_password_provider,
+        )
     if "微信" in name and suffix == ".xlsx":
         return WechatXlsxParser(config)
+    if "微信" in name and suffix == ".zip":
+        return ZipParser(
+            config,
+            WechatXlsxParser,
+            (".xlsx",),
+            "WeChat zip",
+            zip_password_provider,
+        )
     if "工商银行" in name and suffix == ".eml":
         return IcbcEmailParser(config)
     raise ValueError(f"cannot infer parser for {path}")

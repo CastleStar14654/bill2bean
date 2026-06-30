@@ -5,7 +5,7 @@
 支持的输入文件：
 
 - 支付宝导出的 CSV，或支付宝 App 邮件里的加密 ZIP。
-- 微信支付导出的 xlsx。
+- 微信支付导出的 xlsx，或微信邮件里的加密 ZIP。
 - 工商银行信用卡对账单邮件 eml。
 
 示例命令里的 `*` 表示平台导出文件名中的日期、时间戳等可变部分。
@@ -21,11 +21,12 @@ python3 -m bill2bean.cli review -c config.toml -o review.csv \
   '中国工商银行客户对账单*.eml'
 ```
 
-支付宝 App 导出的加密 ZIP 可以直接传入。如果不使用 `--zip-password`，程序会在遇到加密 ZIP 时询问密码：
+支付宝和微信邮件里的加密 ZIP 可以直接传入；ZIP 内应分别包含一个 CSV 或 xlsx 账单文件。如果不使用 `--zip-password`，程序会在遇到加密 ZIP 时询问密码：
 
 ```bash
 python3 -m bill2bean.cli review -c config.toml -o review.csv \
-  '支付宝交易明细*.zip'
+  '支付宝交易明细*.zip' \
+  '微信支付账单流水文件*.zip'
 ```
 
 已有人工编辑过的核对表时，可以复用旧审核结果：
