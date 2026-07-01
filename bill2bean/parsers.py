@@ -64,6 +64,8 @@ class AlipayCsvParser(BillParser):
         for row in rows:
             if not row.get("交易时间"):
                 continue
+            if self._is_pending(row):
+                continue
             txs.append(self._parse_row(row))
         return txs
 
@@ -76,6 +78,8 @@ class AlipayCsvParser(BillParser):
         metadata = {k: (v or "").strip() for k, v in row.items() if k}
         if "&" in payment_method:
             metadata["discount_amount_unknown"] = "true"
+        if self._is_cancelled(row):
+            metadata["cancelled_transaction"] = "true"
         source_account = self._apply_account_metadata(
             row,
             payee,
@@ -159,6 +163,14 @@ class AlipayCsvParser(BillParser):
     @classmethod
     def _is_yuebao_yield(cls, narration: str) -> bool:
         return narration.startswith("余额宝-") and narration.endswith("-收益发放")
+
+    @classmethod
+    def _is_cancelled(cls, row: dict[str, str]) -> bool:
+        return (row.get("交易状态") or "").strip() in {"已撤销", "交易关闭"}
+
+    @classmethod
+    def _is_pending(cls, row: dict[str, str]) -> bool:
+        return (row.get("交易状态") or "").strip() == "处理中"
 
     @classmethod
     def _is_huabei_repayment(cls, row: dict[str, str]) -> bool:

@@ -218,6 +218,11 @@ class TransactionNormalizer:
         )
 
     def _apply_direction_specific_rules(self, tx: BillTransaction) -> bool:
+        if tx.metadata.get("cancelled_transaction") == "true":
+            tx.action = "skip"
+            tx.review_level = ReviewLevel.OK
+            tx.review_reason.add("cancelled_transaction")
+            return True
         if tx.metadata.get("investment_buy_refund") == "true":
             tx.action = "skip"
             tx.review_level = ReviewLevel.OK
