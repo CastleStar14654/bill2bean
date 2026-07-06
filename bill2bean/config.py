@@ -259,11 +259,12 @@ class Config:
         method = (method or "").strip()
         if not method or method == "/":
             return ""
+        method = method.split("&", 1)[0].strip()
         if method == "账户余额":
             return self.alipay_balance_account
         if method == "余额宝":
             return self.alipay_yuebao_account
-        if "花呗" in method:
+        if method == "花呗":
             return self.alipay_huabei_account
         return self.account_for_text(method) or method
 
