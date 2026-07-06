@@ -313,10 +313,10 @@ class WechatXlsxParser(BillParser):
         source_account = self.config.wechat_account_for_method(payment_method, status)
         metadata = dict(row)
         narration = (row.get("商品") or "").strip()
-        if self._is_lqt_transfer(row):
-            source_account, target_account = self._wechat_lqt_transfer_accounts(row)
+        if self._is_platform_transfer(row):
+            source_account, target_account, transfer_kind = self._wechat_transfer_accounts(row)
             metadata["target_account_hint"] = target_account
-            metadata["platform_transfer"] = "wechat_lqt"
+            metadata["platform_transfer"] = transfer_kind
             if not narration or narration == "/":
                 narration = (row.get("交易类型") or "").strip()
         tx = BillTransaction(
@@ -333,12 +333,18 @@ class WechatXlsxParser(BillParser):
         discount = self._discount(row.get("备注", ""))
         if discount:
             tx.metadata["discount_amount"] = str(discount)
+        service_fee = self._service_fee(row.get("备注", ""))
+        if service_fee:
+            tx.commission_amount = str(service_fee)
+            tx.commission_account = self.config.default_expense_account
+            tx.review_level = ReviewLevel.CHECK
+            tx.review_reason.add("wechat_withdrawal_fee")
         return tx
 
     def _direction(self, row: dict[str, str]) -> Direction:
         return self.direction_map.get(row.get("收/支", "").strip(), Direction.NEUTRAL)
 
-    def _wechat_lqt_transfer_accounts(self, row: dict[str, str]) -> tuple[str, str]:
+    def _wechat_transfer_accounts(self, row: dict[str, str]) -> tuple[str, str, str]:
         txn_type = row.get("交易类型", "")
         if "转入零钱通" in txn_type:
             source_text = txn_type.split("来自", 1)[1] if "来自" in txn_type else ""
@@ -346,10 +352,17 @@ class WechatXlsxParser(BillParser):
                 source_account = self.config.wechat_balance_account
             else:
                 source_account = self.config.account_for_text(source_text) or source_text
-            return source_account, self.config.wechat_lqt_account
+            return source_account, self.config.wechat_lqt_account, "wechat_lqt"
+        if "零钱提现" in txn_type:
+            target_text = (row.get("支付方式") or "").strip()
+            target_account = self.config.account_for_text(target_text) or target_text
+            return self.config.wechat_balance_account, target_account, "wechat_balance_withdrawal"
         target_text = txn_type.split("到", 1)[1] if "到" in txn_type else ""
-        target_account = self.config.account_for_text(target_text) or target_text
-        return self.config.wechat_lqt_account, target_account
+        if target_text == "零钱":
+            target_account = self.config.wechat_balance_account
+        else:
+            target_account = self.config.account_for_text(target_text) or target_text
+        return self.config.wechat_lqt_account, target_account, "wechat_lqt"
 
     def _read_rows(self, path: str | Path) -> list[list[str]]:
         with zipfile.ZipFile(path) as zf:
@@ -404,9 +417,20 @@ class WechatXlsxParser(BillParser):
         return _money(match.group(1))
 
     @classmethod
-    def _is_lqt_transfer(cls, row: dict[str, str]) -> bool:
+    def _service_fee(cls, note: str) -> Decimal:
+        match = re.search(r"服务费[¥￥]?([\d.]+)", note or "")
+        if not match:
+            return Decimal("0.00")
+        return _money(match.group(1))
+
+    @classmethod
+    def _is_platform_transfer(cls, row: dict[str, str]) -> bool:
         txn_type = row.get("交易类型", "")
-        return "转入零钱通" in txn_type or "零钱通转出" in txn_type
+        return (
+            "转入零钱通" in txn_type
+            or "零钱通转出" in txn_type
+            or "零钱提现" in txn_type
+        )
 
 
 class _TableParser(HTMLParser):

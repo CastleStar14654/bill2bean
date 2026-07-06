@@ -302,6 +302,7 @@ def _build_transaction_draft(
             row.get("discount_amount", ""),
             row.get("uid", ""),
         )
+        commission_amount = _decimal(row.get("commission_amount") or "0")
         target_amount = amount + discount_amount
         postings.append(_posting(row, row["expense_account"], target_amount, currency))
         if discount_amount:
@@ -313,7 +314,16 @@ def _build_transaction_draft(
                     currency,
                 )
             )
-        postings.append(_posting(row, row["source_account"], -amount, currency))
+        if commission_amount:
+            postings.append(
+                _posting(
+                    row,
+                    _required_account(row, "commission_account"),
+                    commission_amount,
+                    currency,
+                )
+            )
+        postings.append(_posting(row, row["source_account"], -(amount + commission_amount), currency))
     else:
         postings.append(_posting(row, row["source_account"], amount, currency))
     return _draft(row, metadata, postings)
