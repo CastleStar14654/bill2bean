@@ -243,7 +243,6 @@ class TransactionNormalizer:
 
     def _apply_expense_rules(self, tx: BillTransaction) -> None:
         tx.expense_account = self.config.expense_account_for(tx)
-        tx.fill_default_discount_account(self.config.discount_income_account)
         self._apply_payment_discount_metadata(tx)
         if tx.is_family_card():
             tx.apply_family_card_share(self.config.default_share_account)
@@ -324,9 +323,11 @@ class TransactionNormalizer:
 
     def _apply_payment_discount_metadata(self, tx: BillTransaction) -> None:
         if tx.metadata.get("discount_amount"):
+            tx.fill_default_discount_account(self.config.discount_income_account)
             tx.discount_amount = str(tx.metadata["discount_amount"])
             tx.review_reason.add("payment_discount")
         elif tx.metadata.get("discount_amount_unknown") == "true":
+            tx.fill_default_discount_account(self.config.discount_income_account)
             tx.review_level = ReviewLevel.MANUAL
             tx.review_reason.add("payment_discount_amount_unknown")
 class CrossSourceMatcher:
