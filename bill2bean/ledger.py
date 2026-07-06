@@ -272,10 +272,15 @@ class TransactionNormalizer:
     def _apply_platform_account_transfer(self, tx: BillTransaction) -> None:
         target_account = tx.metadata.get("target_account_hint", "")
         reason = tx.metadata.get("platform_transfer", "platform_transfer")
-        if tx.source_account_hint == target_account:
+        has_payment_discount = (
+            bool(tx.metadata.get("discount_amount"))
+            or tx.metadata.get("discount_amount_unknown") == "true"
+        )
+        if tx.source_account_hint == target_account and not has_payment_discount:
             tx.mark_same_account_transfer("same_account_" + reason)
             return
         tx.mark_check_transfer(target_account, reason)
+        self._apply_payment_discount_metadata(tx)
         if not is_account_name(target_account):
             tx.review_level = ReviewLevel.MANUAL
             tx.review_reason.add("unknown_target_account")
