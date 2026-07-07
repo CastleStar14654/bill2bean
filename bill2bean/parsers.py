@@ -629,6 +629,8 @@ class IcbcEmailParser(BillParser):
             return True
         if txn_type == "他行汇入" and "牡丹卡中心" in merchant:
             return True
+        if txn_type == "网转" and "WAP银行" in merchant:
+            return True
         return txn_type == "银联入账" and "银联转账" in merchant
 
 
