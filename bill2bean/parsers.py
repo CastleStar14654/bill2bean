@@ -485,8 +485,19 @@ class IcbcEmailParser(BillParser):
         previous_postable: BillTransaction | None = None
         detail_rows = self._detail_rows(parser.rows)
         rmb_card = self._rmb_unionpay_card(detail_rows)
-        for row_number, row in detail_rows:
-            tx = self._parse_detail_row(row, row_number, rmb_card)
+        rmb_order_by_post_date: Counter[str] = Counter()
+        for row_number, row, section in detail_rows:
+            post_date = row[2]
+            posting_time = datetime.strptime(post_date, "%Y-%m-%d")
+            if section == "rmb":
+                rmb_order_by_post_date[post_date] += 1
+                posting_time += timedelta(seconds=rmb_order_by_post_date[post_date])
+            tx = self._parse_detail_row(
+                row,
+                row_number,
+                rmb_card,
+                posting_time,
+            )
             if self._is_shuakajin(tx) and previous_postable:
                 tx.action = "merge_cashback"
                 tx.income_account = self.config.icbc_shuakajin_income_account
@@ -502,16 +513,19 @@ class IcbcEmailParser(BillParser):
             txs.append(tx)
         return txs
 
-    def _detail_rows(self, rows: list[list[str]]) -> list[tuple[int, list[str]]]:
-        in_details = False
-        detail_rows: list[tuple[int, list[str]]] = []
+    def _detail_rows(self, rows: list[list[str]]) -> list[tuple[int, list[str], str]]:
+        section = ""
+        detail_rows: list[tuple[int, list[str], str]] = []
         for row_number, row in enumerate(rows, start=1):
             row_text = " ".join(row)
-            if any(marker in row_text for marker in self.detail_table_markers):
-                in_details = True
+            if self.detail_table_markers[0] in row_text:
+                section = "rmb"
                 continue
-            if in_details and len(row) >= 7 and re.fullmatch(r"\d{4}", row[0]):
-                detail_rows.append((row_number, row[:7]))
+            if self.detail_table_markers[1] in row_text:
+                section = "fx"
+                continue
+            if section and len(row) >= 7 and re.fullmatch(r"\d{4}", row[0]):
+                detail_rows.append((row_number, row[:7], section))
         return detail_rows
 
     def _is_shuakajin(self, tx: BillTransaction) -> bool:
@@ -520,7 +534,11 @@ class IcbcEmailParser(BillParser):
         )
 
     def _parse_detail_row(
-        self, row: list[str], row_number: int, rmb_card: str | None
+        self,
+        row: list[str],
+        row_number: int,
+        rmb_card: str | None,
+        posting_time: datetime,
     ) -> BillTransaction:
         card, txn_date, post_date, txn_type, merchant, txn_amount, post_amount = row
         txn_amount_text, txn_currency = self._parse_txn_amount(txn_amount)
@@ -561,7 +579,7 @@ class IcbcEmailParser(BillParser):
         tx = BillTransaction(
             source=self.source,
             source_id=f"row:{row_number}|" + "|".join(row),
-            time=datetime.strptime(post_date, "%Y-%m-%d"),
+            time=posting_time,
             payee=merchant,
             narration=txn_type,
             amount=_money(amount_text),
@@ -597,17 +615,18 @@ class IcbcEmailParser(BillParser):
     def _beancount_currency(self, currency: str) -> str:
         return "CNY" if currency == "RMB" else currency
 
-    def _rmb_unionpay_card(self, rows: list[tuple[int, list[str]]]) -> str | None:
+    def _rmb_unionpay_card(self, rows: list[tuple[int, list[str], str]]) -> str | None:
         cards: Counter[str] = Counter()
-        for _row_number, row in rows:
+        for _row_number, row, section in rows:
+            if section != "rmb":
+                continue
             card, _txn_date, _post_date, txn_type, merchant, _txn_amount, post_amount = row
             try:
-                _amount_text, currency, flow = self._parse_post_amount(post_amount)
+                _amount_text, _currency, flow = self._parse_post_amount(post_amount)
             except ValueError:
                 continue
             if (
-                currency == "CNY"
-                and flow == "支出"
+                flow == "支出"
                 and txn_type not in {"刷卡金"}
                 and "退款" not in txn_type
             ):
