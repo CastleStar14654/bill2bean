@@ -619,7 +619,7 @@ class IcbcEmailParser(BillParser):
     def _is_repayment_like(self, txn_type: str, merchant: str, flow: str) -> bool:
         if flow != "存入" or "退款" in merchant:
             return False
-        if txn_type in {"信用卡还款", "转账", "转帐"}:
+        if txn_type in {"信用卡还款", "财付通信用卡还款", "转账", "转帐"}:
             return True
         if txn_type == "他行汇入" and "牡丹卡中心" in merchant:
             return True
