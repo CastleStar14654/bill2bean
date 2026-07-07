@@ -140,6 +140,14 @@ income_account = "Income:Rebate:Visa"
 
 工行信用卡外币账单以“记账金额/币种”为 `amount` 和 `currency`，日期使用记账日。如果“交易金额/币种”和“记账金额/币种”不同，会额外填入 `original_amount` 和 `original_currency`；导出时消费分录使用 Beancount `@@`。
 
+如果工行人民币区的 CNY 还款显示到了外币主卡尾号，可以用 `[icbc]` 把这些外币卡尾号重映射到默认人民币卡尾号。该规则只影响人民币区的还款类存入交易，不影响外币区、消费、退款或非还款交易：
+
+```toml
+[icbc]
+foreign_card_suffixes = ["5678"]
+default_rmb_card_suffix = "1234"
+```
+
 ## Investment Export
 
 支付宝基金/黄金交易在 review 中标记为 `action=invest`，默认不会随普通消费导出。需要导出投资交易时同时指定 commodity 文件、基金交易输出文件和价格文件：

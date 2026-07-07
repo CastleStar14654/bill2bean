@@ -97,6 +97,8 @@ class Config:
     alipay_huabei_account: str
     wechat_balance_account: str
     wechat_lqt_account: str
+    icbc_foreign_card_suffixes: set[str]
+    icbc_default_rmb_card_suffix: str
     account_rules: list[RegexRule]
     expense_rules: list[RegexRule]
     income_rules: list[RegexRule]
@@ -109,6 +111,7 @@ class Config:
     def load(cls, path: str | Path) -> "Config":
         data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
         defaults = data.get("defaults", {})
+        icbc = data.get("icbc", {})
         funds = data.get("funds", {})
         return cls(
             default_expense_account=defaults.get("expense_account", "Expenses:Other"),
@@ -146,6 +149,10 @@ class Config:
                 "wechat_lqt_account",
                 "Assets:Current:WeChat:LQT",
             ),
+            icbc_foreign_card_suffixes={
+                str(value) for value in icbc.get("foreign_card_suffixes", [])
+            },
+            icbc_default_rmb_card_suffix=str(icbc.get("default_rmb_card_suffix", "")),
             account_rules=[
                 RegexRule(r["pattern"], r["account"]) for r in data.get("account_rules", [])
             ],
@@ -296,6 +303,14 @@ class Config:
             if rule.matches(tx):
                 return rule.income_account or self.cashback_income_account
         return ""
+
+    def icbc_rmb_repayment_card_for(self, card: str) -> str:
+        if (
+            card in self.icbc_foreign_card_suffixes
+            and self.icbc_default_rmb_card_suffix
+        ):
+            return self.icbc_default_rmb_card_suffix
+        return card
 
 
 def _list_value(data: dict, list_key: str, scalar_key: str) -> list[str]:

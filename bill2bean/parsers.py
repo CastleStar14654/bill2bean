@@ -484,7 +484,6 @@ class IcbcEmailParser(BillParser):
         txs: list[BillTransaction] = []
         previous_postable: BillTransaction | None = None
         detail_rows = self._detail_rows(parser.rows)
-        rmb_card = self._rmb_unionpay_card(detail_rows)
         rmb_order_by_post_date: Counter[str] = Counter()
         for row_number, row, section in detail_rows:
             post_date = row[2]
@@ -495,8 +494,8 @@ class IcbcEmailParser(BillParser):
             tx = self._parse_detail_row(
                 row,
                 row_number,
-                rmb_card,
                 posting_time,
+                section,
             )
             if self._is_shuakajin(tx) and previous_postable:
                 tx.action = "merge_cashback"
@@ -537,8 +536,8 @@ class IcbcEmailParser(BillParser):
         self,
         row: list[str],
         row_number: int,
-        rmb_card: str | None,
         posting_time: datetime,
+        section: str,
     ) -> BillTransaction:
         card, txn_date, post_date, txn_type, merchant, txn_amount, post_amount = row
         txn_amount_text, txn_currency = self._parse_txn_amount(txn_amount)
@@ -563,10 +562,16 @@ class IcbcEmailParser(BillParser):
             metadata["original_currency"] = txn_currency
         if self._is_repayment_like(txn_type, merchant, flow):
             metadata["is_credit_card_repayment"] = "true"
-            if currency == "CNY" and rmb_card and card != rmb_card:
-                account_card = rmb_card
+            remapped_card = (
+                self.config.icbc_rmb_repayment_card_for(card)
+                if section == "rmb" and currency == "CNY"
+                else card
+            )
+            if remapped_card != card:
+                account_card = remapped_card
                 metadata["account_card"] = account_card
                 metadata["original_card"] = card
+                metadata["icbc_rmb_repayment_card_remapped"] = "true"
             if txn_type != "信用卡还款":
                 metadata["original_txn_type"] = txn_type
                 metadata["txn_type"] = "信用卡还款"
@@ -614,26 +619,6 @@ class IcbcEmailParser(BillParser):
 
     def _beancount_currency(self, currency: str) -> str:
         return "CNY" if currency == "RMB" else currency
-
-    def _rmb_unionpay_card(self, rows: list[tuple[int, list[str], str]]) -> str | None:
-        cards: Counter[str] = Counter()
-        for _row_number, row, section in rows:
-            if section != "rmb":
-                continue
-            card, _txn_date, _post_date, txn_type, merchant, _txn_amount, post_amount = row
-            try:
-                _amount_text, _currency, flow = self._parse_post_amount(post_amount)
-            except ValueError:
-                continue
-            if (
-                flow == "支出"
-                and txn_type not in {"刷卡金"}
-                and "退款" not in txn_type
-            ):
-                cards[card] += 1
-        if not cards:
-            return None
-        return cards.most_common(1)[0][0]
 
     def _is_repayment_like(self, txn_type: str, merchant: str, flow: str) -> bool:
         if flow != "存入" or "退款" in merchant:
