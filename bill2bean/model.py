@@ -182,7 +182,16 @@ class BillTransaction:
         }:
             return True
         if self.source == "wechat":
-            return "退款" in self.metadata.get("交易类型", "") or "退款" in self.metadata.get("当前状态", "")
+            return "退款" in self.metadata.get("交易类型", "")
+        if self.source == "alipay":
+            narration = self.metadata.get("商品说明", "").strip()
+            return (
+                self.metadata.get("交易状态", "").strip() == "退款成功"
+                and (
+                    self.metadata.get("交易分类", "").strip() == "退款"
+                    or narration.startswith("退款-")
+                )
+            )
         return False
 
     def is_platform_account_transfer(self) -> bool:

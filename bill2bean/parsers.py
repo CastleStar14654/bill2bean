@@ -166,7 +166,9 @@ class AlipayCsvParser(BillParser):
 
     @classmethod
     def _is_cancelled(cls, row: dict[str, str]) -> bool:
-        return (row.get("交易状态") or "").strip() in {"已撤销", "交易关闭"}
+        status = (row.get("交易状态") or "").strip()
+        direction = (row.get("收/支") or "").strip()
+        return status == "已撤销" or (status == "交易关闭" and direction == "不计收支")
 
     @classmethod
     def _is_pending(cls, row: dict[str, str]) -> bool:

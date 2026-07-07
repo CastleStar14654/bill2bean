@@ -228,6 +228,9 @@ class TransactionNormalizer:
             tx.review_level = ReviewLevel.OK
             tx.review_reason.add("investment_buy_refund")
             return False
+        if tx.is_refund():
+            tx.convert_refund_to_negative_expense(self.config.expense_account_for(tx))
+            return True
         if tx.direction == Direction.EXPENSE:
             self._apply_expense_rules(tx)
             return False
@@ -248,9 +251,6 @@ class TransactionNormalizer:
             tx.apply_family_card_share(self.config.default_share_account)
 
     def _apply_income_rules(self, tx: BillTransaction) -> bool:
-        if tx.is_refund():
-            tx.convert_refund_to_negative_expense(self.config.expense_account_for(tx))
-            return True
         tx.income_account = self._income_account_for(tx)
         if tx.is_credit_card_repayment_credit():
             tx.mark_unmatched_credit_card_repayment(self.config.default_income_account)
