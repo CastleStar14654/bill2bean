@@ -140,6 +140,8 @@ income_account = "Income:Rebate:Visa"
 
 工行信用卡外币账单以“记账金额/币种”为 `amount` 和 `currency`，日期使用记账日。如果“交易金额/币种”和“记账金额/币种”不同，会额外填入 `original_amount` 和 `original_currency`；导出时消费分录使用 Beancount `@@`。
 
+外币信用卡购汇还款通常需要在 review 中手动改成 `action=transfer`、`direction=transfer`，并把付款账户填入 `source_account`、信用卡账户填入 `expense_account`。此时 `amount/currency` 表示还入信用卡的外币金额，`original_amount/original_currency` 表示购汇使用的人民币金额；如果只填 `original_amount`，`original_currency` 默认按 `CNY` 处理。导出时会生成 `amount currency @@ original_amount original_currency`。带 `original_amount/original_currency` 的 transfer 不支持 `discount_amount` 或 `commission_amount`；income 行如果填写了 `original_amount/original_currency` 会报错，提示改成 transfer。
+
 如果工行人民币区的 CNY 还款显示到了外币主卡尾号，可以用 `[icbc]` 把这些外币卡尾号重映射到默认人民币卡尾号。该规则只影响人民币区的还款类存入交易，不影响外币区、消费、退款或非还款交易：
 
 ```toml

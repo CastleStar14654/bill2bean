@@ -293,6 +293,7 @@ def _build_transaction_draft(
         source_amount = _apply_cashbacks(row, cashbacks, postings, source_amount, currency)
         postings.append(_posting(row, row["source_account"], -source_amount, currency))
     elif direction == "income":
+        _reject_priced_income_row(row)
         postings.append(_posting(row, row["source_account"], amount, currency))
         postings.append(_posting(row, row["income_account"], -amount, currency))
     elif direction == "transfer":
@@ -303,27 +304,43 @@ def _build_transaction_draft(
             row.get("uid", ""),
         )
         commission_amount = _decimal(row.get("commission_amount") or "0")
-        target_amount = amount + discount_amount
-        postings.append(_posting(row, row["expense_account"], target_amount, currency))
-        if discount_amount:
+        original_price = _transfer_original_price(row, currency)
+        if original_price:
+            _reject_original_transfer_adjustments(row, discount_amount, commission_amount)
+            original_amount, original_currency = original_price
             postings.append(
-                _posting(
+                _priced_transfer_target_posting(
                     row,
-                    _required_account(row, "discount_account"),
-                    -discount_amount,
+                    row["expense_account"],
+                    amount,
                     currency,
+                    original_amount,
+                    original_currency,
                 )
             )
-        if commission_amount:
-            postings.append(
-                _posting(
-                    row,
-                    _required_account(row, "commission_account"),
-                    commission_amount,
-                    currency,
+            postings.append(_posting(row, row["source_account"], -original_amount, original_currency))
+        else:
+            target_amount = amount + discount_amount
+            postings.append(_posting(row, row["expense_account"], target_amount, currency))
+            if discount_amount:
+                postings.append(
+                    _posting(
+                        row,
+                        _required_account(row, "discount_account"),
+                        -discount_amount,
+                        currency,
+                    )
                 )
-            )
-        postings.append(_posting(row, row["source_account"], -(amount + commission_amount), currency))
+            if commission_amount:
+                postings.append(
+                    _posting(
+                        row,
+                        _required_account(row, "commission_account"),
+                        commission_amount,
+                        currency,
+                    )
+                )
+            postings.append(_posting(row, row["source_account"], -(amount + commission_amount), currency))
     else:
         postings.append(_posting(row, row["source_account"], amount, currency))
     return _draft(row, metadata, postings)
@@ -469,6 +486,82 @@ def _expense_posting(
             _posting_flag(row, account),
         )
     return _posting(row, account, amount, currency)
+
+
+def _priced_transfer_target_posting(
+    row: ReviewRow,
+    account: str,
+    amount: Decimal,
+    currency: str,
+    original_amount: Decimal,
+    original_currency: str,
+) -> Posting:
+    return Posting(
+        account,
+        amount,
+        currency,
+        original_amount,
+        original_currency,
+        _posting_flag(row, account),
+    )
+
+
+def _transfer_original_price(row: ReviewRow, currency: str) -> tuple[Decimal, str] | None:
+    original_amount = row.get("original_amount")
+    original_currency = row.get("original_currency")
+    if original_amount:
+        original_currency = original_currency or "CNY"
+        if original_currency == currency:
+            uid = row.get("uid", "")
+            suffix = f" for row {uid}" if uid else ""
+            raise ValueError(
+                "transfer row original_currency matches currency"
+                f"{suffix}; remove original_amount/original_currency or correct the currency"
+            )
+        return _decimal(original_amount), original_currency
+    if original_currency:
+        uid = row.get("uid", "")
+        suffix = f" for row {uid}" if uid else ""
+        raise ValueError(f"original_amount and original_currency must be set together{suffix}")
+    return None
+
+
+def _reject_original_transfer_adjustments(
+    row: ReviewRow,
+    discount_amount: Decimal,
+    commission_amount: Decimal,
+) -> None:
+    unsupported_fields = []
+    if discount_amount:
+        unsupported_fields.append("discount_amount")
+    if commission_amount:
+        unsupported_fields.append("commission_amount")
+    if not unsupported_fields:
+        return
+    uid = row.get("uid", "")
+    suffix = f" for row {uid}" if uid else ""
+    fields = " and ".join(unsupported_fields)
+    verb = "is" if len(unsupported_fields) == 1 else "are"
+    raise ValueError(
+        f"{fields} {verb} not supported on transfer rows with "
+        f"original_amount/original_currency{suffix}"
+    )
+
+
+def _reject_priced_income_row(row: ReviewRow) -> None:
+    if not row.get("original_amount") and not row.get("original_currency"):
+        return
+    if row.get("original_amount") and row.get("original_currency"):
+        uid = row.get("uid", "")
+        suffix = f" for row {uid}" if uid else ""
+        raise ValueError(
+            "income row with original_amount/original_currency is ambiguous"
+            f"{suffix}; convert it to action=transfer,direction=transfer and set "
+            "source_account and expense_account"
+        )
+    uid = row.get("uid", "")
+    suffix = f" for row {uid}" if uid else ""
+    raise ValueError(f"original_amount and original_currency must be set together{suffix}")
 
 
 def _posting(
