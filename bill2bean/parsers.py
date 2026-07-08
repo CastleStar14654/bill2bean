@@ -338,7 +338,7 @@ class WechatXlsxParser(BillParser):
         service_fee = self._service_fee(row.get("备注", ""))
         if service_fee:
             tx.commission_amount = str(service_fee)
-            tx.commission_account = self.config.default_expense_account
+            tx.commission_account = self.config.default_commission_account
             tx.review_level = ReviewLevel.CHECK
             tx.review_reason.add("wechat_withdrawal_fee")
         return tx

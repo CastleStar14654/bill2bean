@@ -5,7 +5,7 @@ import getpass
 import sys
 
 from .config import Config
-from .exporter import filter_review_rows, render_beancount, required_accounts_for_export
+from .exporter import ExportDefaults, filter_review_rows, render_beancount, required_accounts_for_export
 from .investments import (
     extract_price_directives,
     merge_price_directives,
@@ -130,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.price_output == "":
         args.price_output = args.output
     config = Config.load(args.config)
+    export_defaults = ExportDefaults.from_config(config)
     try:
         filtered_rows = filter_review_rows(
             rows,
@@ -149,6 +150,7 @@ def main(argv: list[str] | None = None) -> int:
                 exclude_sources=exclude_sources,
                 start_date=args.start_date,
                 end_date=args.end_date,
+                defaults=export_defaults,
             )
             if fund_enabled:
                 required_accounts |= required_accounts_for_fund_export(
@@ -172,6 +174,7 @@ def main(argv: list[str] | None = None) -> int:
             exclude_sources=exclude_sources,
             start_date=args.start_date,
             end_date=args.end_date,
+            defaults=export_defaults,
         )
         outputs: dict[str, list[str]] = {args.output: [normal_text]}
         if fund_enabled:

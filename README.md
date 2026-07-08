@@ -113,7 +113,7 @@ python3 -m bill2bean.cli export review.csv -o imported.bean \
 - `share=whole`：剩余实付净额全部进入 `share_account`，适合亲属卡个人支出。
 - `share=custom`：使用 `share_amount`。
 
-`share_account` 的默认值来自 `default_share_account`。微信亲属卡交易会自动标记 `share=whole`，但这个默认账户同样适用于手动填写的 share。
+`share_account` 的默认值来自 `default_share_account`。review 生成时，所有支出行都会带出 `receivable_account`、`aa_account` 和 `share_account`，方便人工把普通支出改成报销、AA 或共同支出；非支出行不会填这些无关账户。微信亲属卡交易会自动标记 `share=whole`。
 
 `action=reimburse` 用于公务报销等场景。默认整笔实付净额进入 `receivable_account`；如果同时填写 `aa_amount`，则 `aa_amount` 进入 `aa_account`，剩余净额进入 `receivable_account`。`reimburse` 与 `share` 不应共存；如果同时填写，会标记 `manual` 并添加 `reimburse_overrides_share`，导出仍按报销处理。
 
@@ -136,7 +136,9 @@ income_account = "Income:Rebate:Visa"
 
 规则匹配商户名，可选限制卡号，也可以用 `income_account` 指定这一类返现的收入账户；未指定时使用 `cashback_income_account`。配置规则识别出的返现会作为独立收入导出，不需要修改代码。新增会合并到主消费的实时返现模式目前需要修改 parser/匹配代码；已支持的工行实时刷卡金使用 `merge_cashback` 合并到对应消费。
 
-支付优惠通过 `discount_amount` 和 `discount_account` 处理。`review.csv` 中的 `amount` 是账单给出的实付金额；如果存在支付优惠，`discount_amount` 表示在实付金额之外额外冲减的消费金额。微信备注中的 `已优惠...` 会自动填入 `discount_amount`。支付宝 `收/付款方式` 含 `&` 时只能判断有优惠但没有金额，会标记为 `manual`，需要人工补金额。默认优惠收入账户是 `discount_income_account`。
+支付优惠通过 `discount_amount` 和 `discount_account` 处理。`review.csv` 中的 `amount` 是账单给出的实付金额；如果存在支付优惠，`discount_amount` 表示在实付金额之外额外冲减的消费金额。微信备注中的 `已优惠...` 会自动填入 `discount_amount`。支付宝 `收/付款方式` 含 `&` 时只能判断有优惠但没有金额，会标记为 `manual`，需要人工补金额。默认优惠收入账户是 `discount_income_account`；导出时如果 `discount_amount` 非空但 `discount_account` 为空，会使用这个默认值。
+
+手续费通过 `commission_amount` 和 `commission_account` 处理。普通交易的默认手续费账户来自 `defaults.commission_account`，投资交易的默认手续费账户来自 `funds.commission_account`。
 
 工行信用卡外币账单以“记账金额/币种”为 `amount` 和 `currency`，日期使用记账日。如果“交易金额/币种”和“记账金额/币种”不同，会额外填入 `original_amount` 和 `original_currency`；导出时消费分录使用 Beancount `@@`。
 

@@ -92,6 +92,7 @@ class Config:
     reimburse_account: str
     default_share_account: str
     discount_income_account: str
+    default_commission_account: str
     alipay_balance_account: str
     alipay_yuebao_account: str
     alipay_huabei_account: str
@@ -129,6 +130,9 @@ class Config:
                 "Assets:Receivables:Partner",
             ),
             discount_income_account=defaults.get("discount_income_account", "Income:Other"),
+            default_commission_account=defaults.get(
+                "commission_account", "Expenses:Commissions"
+            ),
             alipay_balance_account=defaults.get(
                 "alipay_balance_account",
                 "Assets:Current:Alipay:Balance",

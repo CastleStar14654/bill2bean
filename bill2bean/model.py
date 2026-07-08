@@ -211,15 +211,16 @@ class BillTransaction:
             self.share = ""
             self.share_amount = ""
 
-    def fill_review_accounts(
+    def fill_relevant_review_accounts(
         self,
         aa_account: str,
         receivable_account: str,
         share_account: str,
     ) -> None:
-        self.aa_account = self.aa_account or aa_account
-        self.receivable_account = self.receivable_account or receivable_account
-        self.share_account = self.share_account or share_account
+        if self.direction == Direction.EXPENSE:
+            self.aa_account = self.aa_account or aa_account
+            self.receivable_account = self.receivable_account or receivable_account
+            self.share_account = self.share_account or share_account
 
     def apply_family_card_share(self, share_account: str) -> None:
         self.share = self.share or "whole"

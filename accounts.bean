@@ -26,7 +26,7 @@ option "operating_currency" "CNY"
 2020-01-01 open Expenses:Medical CNY
 2020-01-01 open Expenses:Entertainment CNY
 2020-01-01 open Expenses:Utilities CNY
-2020-01-01 open Expenses:Invest:Commissions
+2020-01-01 open Expenses:Commissions CNY
 
 2020-01-01 open Income:Other
 2020-01-01 open Income:Prize CNY

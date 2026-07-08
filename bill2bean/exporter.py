@@ -31,6 +31,28 @@ class TransactionDraft:
     tags_links: str = ""
 
 
+@dataclass(frozen=True)
+class ExportDefaults:
+    aa_account: str = ""
+    receivable_account: str = ""
+    share_account: str = ""
+    discount_account: str = ""
+    commission_account: str = ""
+
+    @classmethod
+    def from_config(cls, config) -> "ExportDefaults":
+        return cls(
+            aa_account=config.aa_account,
+            receivable_account=config.reimburse_account,
+            share_account=config.default_share_account,
+            discount_account=config.discount_income_account,
+            commission_account=config.default_commission_account,
+        )
+
+    def account_for(self, field: str) -> str:
+        return getattr(self, field, "")
+
+
 def export_beancount(
     review_csv: str | Path,
     output: str | Path,
@@ -42,6 +64,7 @@ def export_beancount(
     exclude_sources: set[str] | None = None,
     start_date: str = "",
     end_date: str = "",
+    defaults: ExportDefaults | None = None,
 ) -> None:
     all_rows = read_review_csv(review_csv)
     text = render_beancount(
@@ -54,6 +77,7 @@ def export_beancount(
         exclude_sources=exclude_sources,
         start_date=start_date,
         end_date=end_date,
+        defaults=defaults,
     )
     Path(output).write_text(text, encoding="utf-8")
 
@@ -68,7 +92,9 @@ def render_beancount(
     exclude_sources: set[str] | None = None,
     start_date: str = "",
     end_date: str = "",
+    defaults: ExportDefaults | None = None,
 ) -> str:
+    defaults = defaults or ExportDefaults()
     all_rows = rows
     cashback_by_parent = cashback_mapping(all_rows)
     filtered = filter_review_rows(
@@ -81,7 +107,7 @@ def render_beancount(
 
     chunks: list[str] = []
     for row in filtered:
-        draft = _build_transaction_draft(row, cashback_by_parent.get(row["uid"], []))
+        draft = _build_transaction_draft(row, cashback_by_parent.get(row["uid"], []), defaults)
         if not draft:
             continue
         chunk = _format_transaction(draft)
@@ -179,7 +205,9 @@ def required_accounts_for_export(
     exclude_sources: set[str] | None = None,
     start_date: str = "",
     end_date: str = "",
+    defaults: ExportDefaults | None = None,
 ) -> set[str]:
+    defaults = defaults or ExportDefaults()
     cashback_by_parent = cashback_mapping(rows)
     filtered = filter_review_rows(
         rows,
@@ -190,7 +218,7 @@ def required_accounts_for_export(
     )
     accounts: set[str] = set()
     for row in filtered:
-        draft = _build_transaction_draft(row, cashback_by_parent.get(row["uid"], []))
+        draft = _build_transaction_draft(row, cashback_by_parent.get(row["uid"], []), defaults)
         if not draft:
             continue
         accounts.update(posting.account for posting in draft.postings if posting.account)
@@ -226,6 +254,7 @@ def _format_header(
 def _build_transaction_draft(
     row: ReviewRow,
     cashbacks: list[ReviewRow],
+    defaults: ExportDefaults,
 ) -> TransactionDraft | None:
     action = (row.action or "post").strip()
     if action in {"skip", "merge_cashback", "invest"}:
@@ -255,20 +284,20 @@ def _build_transaction_draft(
     if action == "reimburse":
         if direction != "expense":
             raise ValueError(f"action='reimburse' requires direction='expense'{_row_context(row)}")
-        postings = _build_reimburse_postings(row, cashbacks, amount, currency)
+        postings = _build_reimburse_postings(row, cashbacks, amount, currency, defaults)
     elif action == "transfer":
         if direction not in {"transfer", "income"}:
             raise ValueError(
                 "action='transfer' requires direction='transfer' or direction='income'"
                 f"{_row_context(row)}"
             )
-        postings = _build_transfer_postings(row, amount, currency)
+        postings = _build_transfer_postings(row, amount, currency, defaults)
     elif direction == "expense":
-        postings = _build_expense_postings(row, cashbacks, amount, currency)
+        postings = _build_expense_postings(row, cashbacks, amount, currency, defaults)
     elif direction == "income":
         postings = _build_income_postings(row, amount, currency)
     elif direction == "transfer":
-        postings = _build_transfer_postings(row, amount, currency)
+        postings = _build_transfer_postings(row, amount, currency, defaults)
     else:
         raise ValueError(f"unsupported direction {direction!r}{_row_context(row)}")
     return _draft(row, metadata, postings)
@@ -279,6 +308,7 @@ def _build_reimburse_postings(
     cashbacks: list[ReviewRow],
     amount: Decimal,
     currency: str,
+    defaults: ExportDefaults,
 ) -> list[Posting]:
     _reject_present_fields(
         row,
@@ -291,10 +321,10 @@ def _build_reimburse_postings(
     reimbursable_amount = amount - aa_amount
     if reimbursable_amount:
         postings.append(
-            _posting(row, _required_account(row, "receivable_account"), reimbursable_amount, currency)
+            _posting(row, _required_account(row, "receivable_account", defaults), reimbursable_amount, currency)
         )
     if aa_amount:
-        postings.append(_posting(row, _required_account(row, "aa_account"), aa_amount, currency))
+        postings.append(_posting(row, _required_account(row, "aa_account", defaults), aa_amount, currency))
     source_amount = _apply_cashbacks(row, cashbacks, postings, source_amount, currency)
     postings.append(_posting(row, _required_account(row, "source_account"), -source_amount, currency))
     return postings
@@ -305,6 +335,7 @@ def _build_expense_postings(
     cashbacks: list[ReviewRow],
     amount: Decimal,
     currency: str,
+    defaults: ExportDefaults,
 ) -> list[Posting]:
     _reject_present_fields(row, ("commission_amount",), "expense rows")
     postings: list[Posting] = []
@@ -321,16 +352,16 @@ def _build_expense_postings(
         if personal_amount:
             postings.append(_posting(row, _required_account(row, "expense_account"), personal_amount, currency))
         if aa_amount:
-            postings.append(_posting(row, _required_account(row, "aa_account"), aa_amount, currency))
+            postings.append(_posting(row, _required_account(row, "aa_account", defaults), aa_amount, currency))
         if share_amount:
-            postings.append(_posting(row, _required_account(row, "share_account"), share_amount, currency))
+            postings.append(_posting(row, _required_account(row, "share_account", defaults), share_amount, currency))
     else:
         postings.append(_expense_posting(row, _required_account(row, "expense_account"), gross_amount, currency))
     if discount_amount:
         postings.append(
             _posting(
                 row,
-                _required_account(row, "discount_account"),
+                _required_account(row, "discount_account", defaults),
                 -discount_amount,
                 currency,
             )
@@ -361,6 +392,7 @@ def _build_transfer_postings(
     row: ReviewRow,
     amount: Decimal,
     currency: str,
+    defaults: ExportDefaults,
 ) -> list[Posting]:
     _reject_present_fields(row, ("aa_amount", "share", "share_amount"), "transfer rows")
     target_field, source_field = _transfer_account_fields(row)
@@ -393,7 +425,7 @@ def _build_transfer_postings(
         postings.append(
             _posting(
                 row,
-                _required_account(row, "discount_account"),
+                _required_account(row, "discount_account", defaults),
                 -discount_amount,
                 currency,
             )
@@ -402,7 +434,7 @@ def _build_transfer_postings(
         postings.append(
             _posting(
                 row,
-                _required_account(row, "commission_account"),
+                _required_account(row, "commission_account", defaults),
                 commission_amount,
                 currency,
             )
@@ -432,8 +464,12 @@ def _draft(
     )
 
 
-def _required_account(row: ReviewRow, field: str) -> str:
-    account = row.get(field, "")
+def _required_account(
+    row: ReviewRow,
+    field: str,
+    defaults: ExportDefaults | None = None,
+) -> str:
+    account = row.get(field, "") or (defaults.account_for(field) if defaults else "")
     if not account:
         raise ValueError(f"missing required {field}{_row_context(row)}")
     return account

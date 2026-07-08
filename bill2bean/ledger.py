@@ -285,7 +285,7 @@ class TransactionNormalizer:
             tx.review_reason.add("unknown_target_account")
 
     def _apply_common_accounts(self, tx: BillTransaction) -> None:
-        tx.fill_review_accounts(
+        tx.fill_relevant_review_accounts(
             self.config.aa_account,
             self.config.reimburse_account,
             self.config.default_share_account,
