@@ -419,7 +419,12 @@ def _build_transfer_postings(
         postings.append(_posting(row, _required_account(row, source_field), -original_amount, original_currency))
         return postings
 
-    target_amount = amount + discount_amount
+    if row.direction == "income":
+        target_amount = amount
+        source_amount = amount - discount_amount + commission_amount
+    else:
+        target_amount = amount + discount_amount
+        source_amount = amount + commission_amount
     postings.append(_posting(row, _required_account(row, target_field), target_amount, currency))
     if discount_amount:
         postings.append(
@@ -439,7 +444,7 @@ def _build_transfer_postings(
                 currency,
             )
         )
-    postings.append(_posting(row, _required_account(row, source_field), -(amount + commission_amount), currency))
+    postings.append(_posting(row, _required_account(row, source_field), -source_amount, currency))
     return postings
 
 
