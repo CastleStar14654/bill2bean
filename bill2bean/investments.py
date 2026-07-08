@@ -12,7 +12,7 @@ from tqdm import tqdm
 
 from .config import FundConfig
 from .discounts import DiscountAmount
-from .exporter import _decimal, _quote
+from .exporter import _quote
 from .ledger import ReviewRow
 
 
@@ -415,6 +415,10 @@ def _fund_narration(row: ReviewRow, trade: FundTrade) -> str:
 
 def _format_decimal(value: Decimal) -> str:
     return format(value, "f")
+
+
+def _decimal(value: str) -> Decimal:
+    return Decimal((value or "0").replace(",", ""))
 
 
 def _metadata_int(metadata: dict[str, str], key: str) -> int | None:

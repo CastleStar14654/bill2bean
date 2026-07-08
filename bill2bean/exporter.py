@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import re
 
@@ -114,7 +114,7 @@ def filter_review_rows(
             continue
         if exclude_sources and source in exclude_sources:
             continue
-        row_date = _posting_date(row)
+        row_date = row.posting_date
         if start_date and row_date < start_date:
             continue
         if end_date and row_date > end_date:
@@ -228,12 +228,13 @@ def _build_transaction_draft(
     cashbacks: list[ReviewRow],
 ) -> TransactionDraft | None:
     action = (row.action or "post").strip()
-    if action in {"skip", "merge_cashback"} or action not in {"post", "reimburse", "transfer"}:
+    if action in {"skip", "merge_cashback", "invest"}:
         return None
+    if action not in {"post", "reimburse", "transfer"}:
+        raise ValueError(f"unsupported action {action!r}{_row_context(row)}")
 
-    amount = _decimal(row["amount"])
+    amount = _decimal_field(row, "amount")
     currency = row.get("currency") or "CNY"
-    postings: list[Posting] = []
     metadata: list[tuple[str, str]] = []
     if row.get("source") or row.get("uid"):
         metadata.append(("source", row.get("source", "")))
@@ -251,99 +252,169 @@ def _build_transaction_draft(
             metadata.append(("share_amount", row["share_amount"]))
 
     direction = row.get("direction")
-    if direction == "expense":
-        if action == "reimburse":
-            source_amount = amount
-            aa_amount = _decimal(row.get("aa_amount") or "0")
-            reimbursable_amount = amount - aa_amount
-            if reimbursable_amount:
-                postings.append(_posting(row, row["receivable_account"], reimbursable_amount, currency))
-            if aa_amount:
-                postings.append(_posting(row, row["aa_account"], aa_amount, currency))
-            source_amount = _apply_cashbacks(row, cashbacks, postings, source_amount, currency)
-            postings.append(_posting(row, row["source_account"], -source_amount, currency))
-            return _draft(row, metadata, postings)
-        source_amount = amount
-        discount_amount = parse_deduction_discount_amount(
-            row.get("discount_amount", ""),
-            row.get("uid", ""),
-        )
-        gross_amount = amount + discount_amount if amount >= 0 else amount - discount_amount
-        aa_amount = _decimal(row.get("aa_amount") or "0")
-        share_amount = _share_receivable_amount(row, amount - aa_amount)
-        personal_amount = gross_amount - aa_amount - share_amount
-        if aa_amount or share_amount:
-            if personal_amount:
-                postings.append(_posting(row, row["expense_account"], personal_amount, currency))
-            if aa_amount:
-                postings.append(_posting(row, row["aa_account"], aa_amount, currency))
-            if share_amount:
-                postings.append(_posting(row, row["share_account"], share_amount, currency))
-        else:
-            postings.append(_expense_posting(row, row["expense_account"], gross_amount, currency))
-        if discount_amount:
-            postings.append(
-                _posting(
-                    row,
-                    _required_account(row, "discount_account"),
-                    -discount_amount,
-                    currency,
-                )
+    if action == "reimburse":
+        if direction != "expense":
+            raise ValueError(f"action='reimburse' requires direction='expense'{_row_context(row)}")
+        postings = _build_reimburse_postings(row, cashbacks, amount, currency)
+    elif action == "transfer":
+        if direction not in {"transfer", "income"}:
+            raise ValueError(
+                "action='transfer' requires direction='transfer' or direction='income'"
+                f"{_row_context(row)}"
             )
-        source_amount = _apply_cashbacks(row, cashbacks, postings, source_amount, currency)
-        postings.append(_posting(row, row["source_account"], -source_amount, currency))
+        postings = _build_transfer_postings(row, amount, currency)
+    elif direction == "expense":
+        postings = _build_expense_postings(row, cashbacks, amount, currency)
     elif direction == "income":
-        _reject_priced_income_row(row)
-        postings.append(_posting(row, row["source_account"], amount, currency))
-        postings.append(_posting(row, row["income_account"], -amount, currency))
+        postings = _build_income_postings(row, amount, currency)
     elif direction == "transfer":
-        if not row.get("expense_account"):
-            return None
-        discount_amount = parse_deduction_discount_amount(
-            row.get("discount_amount", ""),
-            row.get("uid", ""),
-        )
-        commission_amount = _decimal(row.get("commission_amount") or "0")
-        original_price = _transfer_original_price(row, currency)
-        if original_price:
-            _reject_original_transfer_adjustments(row, discount_amount, commission_amount)
-            original_amount, original_currency = original_price
-            postings.append(
-                _priced_transfer_target_posting(
-                    row,
-                    row["expense_account"],
-                    amount,
-                    currency,
-                    original_amount,
-                    original_currency,
-                )
-            )
-            postings.append(_posting(row, row["source_account"], -original_amount, original_currency))
-        else:
-            target_amount = amount + discount_amount
-            postings.append(_posting(row, row["expense_account"], target_amount, currency))
-            if discount_amount:
-                postings.append(
-                    _posting(
-                        row,
-                        _required_account(row, "discount_account"),
-                        -discount_amount,
-                        currency,
-                    )
-                )
-            if commission_amount:
-                postings.append(
-                    _posting(
-                        row,
-                        _required_account(row, "commission_account"),
-                        commission_amount,
-                        currency,
-                    )
-                )
-            postings.append(_posting(row, row["source_account"], -(amount + commission_amount), currency))
+        postings = _build_transfer_postings(row, amount, currency)
     else:
-        postings.append(_posting(row, row["source_account"], amount, currency))
+        raise ValueError(f"unsupported direction {direction!r}{_row_context(row)}")
     return _draft(row, metadata, postings)
+
+
+def _build_reimburse_postings(
+    row: ReviewRow,
+    cashbacks: list[ReviewRow],
+    amount: Decimal,
+    currency: str,
+) -> list[Posting]:
+    _reject_present_fields(
+        row,
+        ("share", "share_amount", "discount_amount", "commission_amount", "original_amount", "original_currency"),
+        "reimburse rows",
+    )
+    postings: list[Posting] = []
+    source_amount = amount
+    aa_amount = _nonnegative_decimal_field(row, "aa_amount", "0")
+    reimbursable_amount = amount - aa_amount
+    if reimbursable_amount:
+        postings.append(
+            _posting(row, _required_account(row, "receivable_account"), reimbursable_amount, currency)
+        )
+    if aa_amount:
+        postings.append(_posting(row, _required_account(row, "aa_account"), aa_amount, currency))
+    source_amount = _apply_cashbacks(row, cashbacks, postings, source_amount, currency)
+    postings.append(_posting(row, _required_account(row, "source_account"), -source_amount, currency))
+    return postings
+
+
+def _build_expense_postings(
+    row: ReviewRow,
+    cashbacks: list[ReviewRow],
+    amount: Decimal,
+    currency: str,
+) -> list[Posting]:
+    _reject_present_fields(row, ("commission_amount",), "expense rows")
+    postings: list[Posting] = []
+    source_amount = amount
+    discount_amount = parse_deduction_discount_amount(
+        row.get("discount_amount", ""),
+        row.get("uid", ""),
+    )
+    gross_amount = amount + discount_amount if amount >= 0 else amount - discount_amount
+    aa_amount = _nonnegative_decimal_field(row, "aa_amount", "0")
+    share_amount = _share_receivable_amount(row, amount - aa_amount)
+    personal_amount = gross_amount - aa_amount - share_amount
+    if aa_amount or share_amount:
+        if personal_amount:
+            postings.append(_posting(row, _required_account(row, "expense_account"), personal_amount, currency))
+        if aa_amount:
+            postings.append(_posting(row, _required_account(row, "aa_account"), aa_amount, currency))
+        if share_amount:
+            postings.append(_posting(row, _required_account(row, "share_account"), share_amount, currency))
+    else:
+        postings.append(_expense_posting(row, _required_account(row, "expense_account"), gross_amount, currency))
+    if discount_amount:
+        postings.append(
+            _posting(
+                row,
+                _required_account(row, "discount_account"),
+                -discount_amount,
+                currency,
+            )
+        )
+    source_amount = _apply_cashbacks(row, cashbacks, postings, source_amount, currency)
+    postings.append(_posting(row, _required_account(row, "source_account"), -source_amount, currency))
+    return postings
+
+
+def _build_income_postings(
+    row: ReviewRow,
+    amount: Decimal,
+    currency: str,
+) -> list[Posting]:
+    _reject_present_fields(
+        row,
+        ("aa_amount", "share", "share_amount", "discount_amount", "commission_amount"),
+        "income rows",
+    )
+    _reject_priced_income_row(row)
+    return [
+        _posting(row, _required_account(row, "source_account"), amount, currency),
+        _posting(row, _required_account(row, "income_account"), -amount, currency),
+    ]
+
+
+def _build_transfer_postings(
+    row: ReviewRow,
+    amount: Decimal,
+    currency: str,
+) -> list[Posting]:
+    _reject_present_fields(row, ("aa_amount", "share", "share_amount"), "transfer rows")
+    target_field, source_field = _transfer_account_fields(row)
+    postings: list[Posting] = []
+    discount_amount = parse_deduction_discount_amount(
+        row.get("discount_amount", ""),
+        row.get("uid", ""),
+    )
+    commission_amount = _nonnegative_decimal_field(row, "commission_amount", "0")
+    original_price = _transfer_original_price(row, currency)
+    if original_price:
+        _reject_original_transfer_adjustments(row, discount_amount, commission_amount)
+        original_amount, original_currency = original_price
+        postings.append(
+            _priced_transfer_target_posting(
+                row,
+                _required_account(row, target_field),
+                amount,
+                currency,
+                original_amount,
+                original_currency,
+            )
+        )
+        postings.append(_posting(row, _required_account(row, source_field), -original_amount, original_currency))
+        return postings
+
+    target_amount = amount + discount_amount
+    postings.append(_posting(row, _required_account(row, target_field), target_amount, currency))
+    if discount_amount:
+        postings.append(
+            _posting(
+                row,
+                _required_account(row, "discount_account"),
+                -discount_amount,
+                currency,
+            )
+        )
+    if commission_amount:
+        postings.append(
+            _posting(
+                row,
+                _required_account(row, "commission_account"),
+                commission_amount,
+                currency,
+            )
+        )
+    postings.append(_posting(row, _required_account(row, source_field), -(amount + commission_amount), currency))
+    return postings
+
+
+def _transfer_account_fields(row: ReviewRow) -> tuple[str, str]:
+    if row.direction == "income":
+        return "source_account", "income_account"
+    return "expense_account", "source_account"
 
 
 def _draft(
@@ -352,7 +423,7 @@ def _draft(
     postings: list[Posting],
 ) -> TransactionDraft:
     return TransactionDraft(
-        date=_posting_date(row),
+        date=row.posting_date,
         payee=row["payee"],
         narration=row["narration"],
         metadata=metadata,
@@ -361,12 +432,10 @@ def _draft(
     )
 
 
-def _required_account(row: dict[str, str], field: str) -> str:
+def _required_account(row: ReviewRow, field: str) -> str:
     account = row.get(field, "")
     if not account:
-        uid = row.get("uid", "")
-        suffix = f" for row {uid}" if uid else ""
-        raise ValueError(f"missing required {field}{suffix}")
+        raise ValueError(f"missing required {field}{_row_context(row)}")
     return account
 
 
@@ -378,7 +447,7 @@ def _apply_cashbacks(
     currency: str,
 ) -> Decimal:
     for cashback in cashbacks:
-        cb_amount = _decimal(cashback["amount"])
+        cb_amount = _decimal_field(cashback, "amount")
         source_amount -= cb_amount
         income_account = _required_account(cashback, "income_account")
         postings.append(_posting(row, income_account, -cb_amount, currency))
@@ -426,16 +495,14 @@ def _implicit_posting_index(postings: list[Posting]) -> int | None:
     if left_kind in {"assets", "liabilities"} and right_kind in {"assets", "liabilities"}:
         return 1
     return None
+
+
 def _quote(value: str) -> str:
     return '"' + (value or "").replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def _escape_directive_value(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
-
-
-def _posting_date(row: dict[str, str]) -> str:
-    return row.posting_date
 
 
 def _tags_links(row: ReviewRow) -> str:
@@ -456,13 +523,20 @@ def _prefixed_token(value: str, prefix: str) -> str:
 
 def _share_receivable_amount(row: ReviewRow, share_base: Decimal) -> Decimal:
     share = (row.get("share") or "").strip().lower()
+    share_amount = (row.get("share_amount") or "").strip()
+    if share_amount and share != "custom":
+        raise ValueError(f"share_amount is only allowed with share='custom'{_row_context(row)}")
+    if not share:
+        return Decimal("0")
     if share == "split":
         return (share_base / Decimal("2")).quantize(Decimal("0.01"))
     if share == "whole":
         return share_base
-    if share == "custom" and row.get("share_amount"):
-        return _decimal(row["share_amount"])
-    return Decimal("0")
+    if share == "custom":
+        if not share_amount:
+            raise ValueError(f"share='custom' requires share_amount{_row_context(row)}")
+        return _nonnegative_decimal_field(row, "share_amount")
+    raise ValueError(f"unsupported share value {share!r}{_row_context(row)}")
 
 
 def _expense_posting(
@@ -473,8 +547,10 @@ def _expense_posting(
 ) -> Posting:
     original_amount = row.get("original_amount")
     original_currency = row.get("original_currency")
+    if bool(original_amount) != bool(original_currency):
+        raise ValueError(f"original_amount and original_currency must be set together{_row_context(row)}")
     if original_amount and original_currency and original_currency != currency:
-        converted_amount = _decimal(original_amount)
+        converted_amount = _decimal_field(row, "original_amount")
         if amount < 0 < converted_amount:
             converted_amount = -converted_amount
         return Posting(
@@ -512,17 +588,13 @@ def _transfer_original_price(row: ReviewRow, currency: str) -> tuple[Decimal, st
     if original_amount:
         original_currency = original_currency or "CNY"
         if original_currency == currency:
-            uid = row.get("uid", "")
-            suffix = f" for row {uid}" if uid else ""
             raise ValueError(
                 "transfer row original_currency matches currency"
-                f"{suffix}; remove original_amount/original_currency or correct the currency"
+                f"{_row_context(row)}; remove original_amount/original_currency or correct the currency"
             )
-        return _decimal(original_amount), original_currency
+        return _decimal_field(row, "original_amount"), original_currency
     if original_currency:
-        uid = row.get("uid", "")
-        suffix = f" for row {uid}" if uid else ""
-        raise ValueError(f"original_amount and original_currency must be set together{suffix}")
+        raise ValueError(f"original_amount and original_currency must be set together{_row_context(row)}")
     return None
 
 
@@ -538,13 +610,11 @@ def _reject_original_transfer_adjustments(
         unsupported_fields.append("commission_amount")
     if not unsupported_fields:
         return
-    uid = row.get("uid", "")
-    suffix = f" for row {uid}" if uid else ""
     fields = " and ".join(unsupported_fields)
     verb = "is" if len(unsupported_fields) == 1 else "are"
     raise ValueError(
         f"{fields} {verb} not supported on transfer rows with "
-        f"original_amount/original_currency{suffix}"
+        f"original_amount/original_currency{_row_context(row)}"
     )
 
 
@@ -552,16 +622,27 @@ def _reject_priced_income_row(row: ReviewRow) -> None:
     if not row.get("original_amount") and not row.get("original_currency"):
         return
     if row.get("original_amount") and row.get("original_currency"):
-        uid = row.get("uid", "")
-        suffix = f" for row {uid}" if uid else ""
         raise ValueError(
             "income row with original_amount/original_currency is ambiguous"
-            f"{suffix}; convert it to action=transfer,direction=transfer and set "
-            "source_account and expense_account"
+            f"{_row_context(row)}; convert it to action=transfer,direction=transfer and set "
+            "source_account and expense_account, or use action=transfer,direction=income with "
+            "income_account as the transfer source"
         )
-    uid = row.get("uid", "")
-    suffix = f" for row {uid}" if uid else ""
-    raise ValueError(f"original_amount and original_currency must be set together{suffix}")
+    raise ValueError(f"original_amount and original_currency must be set together{_row_context(row)}")
+
+
+def _reject_present_fields(
+    row: ReviewRow,
+    fields: tuple[str, ...],
+    context: str,
+) -> None:
+    present = [field for field in fields if (row.get(field) or "").strip()]
+    if not present:
+        return
+    raise ValueError(
+        f"{', '.join(present)} {'is' if len(present) == 1 else 'are'} "
+        f"not supported on {context}{_row_context(row)}"
+    )
 
 
 def _posting(
@@ -579,5 +660,31 @@ def _posting_flag(row: ReviewRow, account: str) -> str:
     return ""
 
 
-def _decimal(value: str) -> Decimal:
-    return Decimal((value or "0").replace(",", ""))
+def _decimal_field(row: ReviewRow, field: str, default: str | None = None) -> Decimal:
+    value = row.get(field)
+    if value is None or value == "":
+        if default is None:
+            raise ValueError(f"missing {field}{_row_context(row)}")
+        value = default
+    try:
+        return Decimal(value.replace(",", ""))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"invalid decimal {field}={value!r}{_row_context(row)}") from exc
+
+
+def _nonnegative_decimal_field(
+    row: ReviewRow,
+    field: str,
+    default: str | None = None,
+) -> Decimal:
+    value = _decimal_field(row, field, default)
+    if value < 0:
+        raise ValueError(f"{field} must be non-negative{_row_context(row)}")
+    return value
+
+
+def _row_context(row: ReviewRow) -> str:
+    if row.get("uid"):
+        return f" for row {row.get('uid')}"
+    details = " ".join(part for part in [row.get("time"), row.get("payee")] if part)
+    return f" for {details}" if details else ""
