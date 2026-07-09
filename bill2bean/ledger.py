@@ -19,6 +19,9 @@ REVIEW_FIELDS = [
     "share",
     "share_amount",
     "discount_amount",
+    "notes",
+    "tags",
+    "links",
     "investment_units",
     "investment_price",
     "investment_price_date",
@@ -41,9 +44,6 @@ REVIEW_FIELDS = [
     "share_account",
     "discount_account",
     "commission_account",
-    "notes",
-    "tags",
-    "links",
     "source_id",
 ]
 
@@ -57,6 +57,9 @@ class ReviewRow:
     share: str = ""
     share_amount: str = ""
     discount_amount: str = ""
+    notes: str = ""
+    tags: str = ""
+    links: str = ""
     investment_units: str = ""
     investment_price: str = ""
     investment_price_date: str = ""
@@ -79,9 +82,6 @@ class ReviewRow:
     share_account: str = ""
     discount_account: str = ""
     commission_account: str = ""
-    notes: str = ""
-    tags: str = ""
-    links: str = ""
     source_id: str = ""
 
     @classmethod
@@ -98,6 +98,9 @@ class ReviewRow:
             share=tx.share,
             share_amount=tx.share_amount,
             discount_amount=tx.discount_amount,
+            notes=tx.notes,
+            tags=tx.tags,
+            links=tx.links,
             investment_units=tx.investment_units,
             investment_price=tx.investment_price,
             investment_price_date=tx.investment_price_date,
@@ -120,9 +123,6 @@ class ReviewRow:
             share_account=tx.share_account,
             discount_account=tx.discount_account,
             commission_account=tx.commission_account,
-            notes=tx.notes,
-            tags=tx.tags,
-            links=tx.links,
             source_id=tx.source_id,
         )
 
