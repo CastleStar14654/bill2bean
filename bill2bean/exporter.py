@@ -423,8 +423,8 @@ def _build_transfer_postings(
         target_amount = amount
         source_amount = amount - discount_amount + commission_amount
     else:
-        target_amount = amount + discount_amount
-        source_amount = amount + commission_amount
+        target_amount = amount + discount_amount - commission_amount
+        source_amount = amount
     postings.append(_posting(row, _required_account(row, target_field), target_amount, currency))
     if discount_amount:
         postings.append(
