@@ -312,22 +312,19 @@ def _build_reimburse_postings(
 ) -> list[Posting]:
     _reject_present_fields(
         row,
-        ("share", "share_amount", "discount_amount", "commission_amount", "original_amount", "original_currency"),
+        ("share", "share_amount", "commission_amount"),
         "reimburse rows",
     )
-    postings: list[Posting] = []
-    source_amount = amount
-    aa_amount = _nonnegative_decimal_field(row, "aa_amount", "0")
-    reimbursable_amount = amount - aa_amount
-    if reimbursable_amount:
-        postings.append(
-            _posting(row, _required_account(row, "receivable_account", defaults), reimbursable_amount, currency)
-        )
-    if aa_amount:
-        postings.append(_posting(row, _required_account(row, "aa_account", defaults), aa_amount, currency))
-    source_amount = _apply_cashbacks(row, cashbacks, postings, source_amount, currency)
-    postings.append(_posting(row, _required_account(row, "source_account"), -source_amount, currency))
-    return postings
+    return _build_outflow_postings(
+        row,
+        cashbacks,
+        amount,
+        currency,
+        defaults,
+        target_account_field="receivable_account",
+        aa_amount=_nonnegative_decimal_field(row, "aa_amount", "0"),
+        share_amount=Decimal("0"),
+    )
 
 
 def _build_expense_postings(
@@ -338,6 +335,29 @@ def _build_expense_postings(
     defaults: ExportDefaults,
 ) -> list[Posting]:
     _reject_present_fields(row, ("commission_amount",), "expense rows")
+    aa_amount = _nonnegative_decimal_field(row, "aa_amount", "0")
+    return _build_outflow_postings(
+        row,
+        cashbacks,
+        amount,
+        currency,
+        defaults,
+        target_account_field="expense_account",
+        aa_amount=aa_amount,
+        share_amount=_share_receivable_amount(row, amount - aa_amount),
+    )
+
+
+def _build_outflow_postings(
+    row: ReviewRow,
+    cashbacks: list[ReviewRow],
+    amount: Decimal,
+    currency: str,
+    defaults: ExportDefaults,
+    target_account_field: str,
+    aa_amount: Decimal,
+    share_amount: Decimal,
+) -> list[Posting]:
     postings: list[Posting] = []
     source_amount = amount
     discount_amount = parse_deduction_discount_amount(
@@ -345,18 +365,17 @@ def _build_expense_postings(
         row.get("uid", ""),
     )
     gross_amount = amount + discount_amount if amount >= 0 else amount - discount_amount
-    aa_amount = _nonnegative_decimal_field(row, "aa_amount", "0")
-    share_amount = _share_receivable_amount(row, amount - aa_amount)
-    personal_amount = gross_amount - aa_amount - share_amount
+    _reject_priced_split(row, aa_amount, share_amount)
+    target_amount = gross_amount - aa_amount - share_amount
     if aa_amount or share_amount:
-        if personal_amount:
-            postings.append(_posting(row, _required_account(row, "expense_account"), personal_amount, currency))
+        if target_amount:
+            postings.append(_posting(row, _required_account(row, target_account_field, defaults), target_amount, currency))
         if aa_amount:
             postings.append(_posting(row, _required_account(row, "aa_account", defaults), aa_amount, currency))
         if share_amount:
             postings.append(_posting(row, _required_account(row, "share_account", defaults), share_amount, currency))
     else:
-        postings.append(_expense_posting(row, _required_account(row, "expense_account"), gross_amount, currency))
+        postings.append(_priced_posting(row, _required_account(row, target_account_field, defaults), gross_amount, currency))
     if discount_amount:
         postings.append(
             _posting(
@@ -580,7 +599,7 @@ def _share_receivable_amount(row: ReviewRow, share_base: Decimal) -> Decimal:
     raise ValueError(f"unsupported share value {share!r}{_row_context(row)}")
 
 
-def _expense_posting(
+def _priced_posting(
     row: ReviewRow,
     account: str,
     amount: Decimal,
@@ -591,18 +610,27 @@ def _expense_posting(
     if bool(original_amount) != bool(original_currency):
         raise ValueError(f"original_amount and original_currency must be set together{_row_context(row)}")
     if original_amount and original_currency and original_currency != currency:
-        converted_amount = _decimal_field(row, "original_amount")
-        if amount < 0 < converted_amount:
-            converted_amount = -converted_amount
+        original_posting_amount = _decimal_field(row, "original_amount")
+        if amount < 0 < original_posting_amount:
+            original_posting_amount = -original_posting_amount
         return Posting(
             account,
-            converted_amount,
+            original_posting_amount,
             original_currency,
             amount,
             currency,
             _posting_flag(row, account),
         )
     return _posting(row, account, amount, currency)
+
+
+def _reject_priced_split(row: ReviewRow, aa_amount: Decimal, share_amount: Decimal) -> None:
+    if not row.get("original_amount") and not row.get("original_currency"):
+        return
+    if aa_amount:
+        raise ValueError(f"aa_amount is not supported with original_amount/original_currency{_row_context(row)}")
+    if share_amount:
+        raise ValueError(f"share is not supported with original_amount/original_currency{_row_context(row)}")
 
 
 def _priced_transfer_target_posting(

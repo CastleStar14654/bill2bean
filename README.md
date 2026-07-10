@@ -115,7 +115,7 @@ python3 -m bill2bean.cli export review.csv -o imported.bean \
 
 `share_account` 的默认值来自 `default_share_account`。review 生成时，所有支出行都会带出 `receivable_account`、`aa_account` 和 `share_account`，方便人工把普通支出改成报销、AA 或共同支出；非支出行不会填这些无关账户。微信亲属卡交易会自动标记 `share=whole`。
 
-`action=reimburse` 用于公务报销等场景。默认整笔实付净额进入 `receivable_account`；如果同时填写 `aa_amount`，则 `aa_amount` 进入 `aa_account`，剩余净额进入 `receivable_account`。`reimburse` 与 `share` 不应共存；如果同时填写，会标记 `manual` 并添加 `reimburse_overrides_share`，导出仍按报销处理。
+`action=reimburse` 用于公务报销等场景。默认整笔实付净额进入 `receivable_account`；如果同时填写 `aa_amount`，则 `aa_amount` 进入 `aa_account`，剩余净额进入 `receivable_account`。报销条目支持 `discount_amount`，也支持通过 `original_amount/original_currency` 记录外币原始金额；但外币 priced posting 不会自动和 `aa_amount` 拆分，二者同时出现会报错。`reimburse` 与 `share` 不应共存；如果同时填写，会标记 `manual` 并添加 `reimburse_overrides_share`，导出仍按报销处理。
 
 如果一笔支出在账务实质上完全不是你的消费，可以直接在 review 中把 `expense_account` 改成对应的 `Assets:Receivables:*` 账户，不必使用 `share`。
 
