@@ -613,6 +613,7 @@ def _priced_posting(
         original_posting_amount = _decimal_field(row, "original_amount")
         if amount < 0 < original_posting_amount:
             original_posting_amount = -original_posting_amount
+            amount = -amount
         return Posting(
             account,
             original_posting_amount,

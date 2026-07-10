@@ -140,7 +140,7 @@ income_account = "Income:Rebate:Visa"
 
 手续费通过 `commission_amount` 和 `commission_account` 处理。普通交易的默认手续费账户来自 `defaults.commission_account`，投资交易的默认手续费账户来自 `funds.commission_account`。
 
-工行信用卡外币账单以“记账金额/币种”为 `amount` 和 `currency`，日期使用记账日。如果“交易金额/币种”和“记账金额/币种”不同，会额外填入 `original_amount` 和 `original_currency`；导出时消费分录使用 Beancount `@@`。
+工行信用卡外币账单以“记账金额/币种”为 `amount` 和 `currency`，日期使用记账日。如果“交易金额/币种”和“记账金额/币种”不同，会额外填入 `original_amount` 和 `original_currency`；导出时消费分录使用 Beancount `@@`。退款会输出负的原始币种 posting，但 `@@` 后的总价保持正数。
 
 还款、提现、平台账户互转等可以用 `action=transfer` 导出。`direction=transfer` 时，付款账户填入 `source_account`，收款或目标账户填入 `expense_account`；`amount` 表示付款账户的出账金额，目标账户金额按 `amount + discount_amount - commission_amount` 计算。如果原始条目是收入方向，可以使用 `action=transfer`、`direction=income`，此时按 `income_account -> source_account` 导出，方便只把原来的 `income_account` 改成实际付款账户；`amount` 表示入账金额，出账金额按 `amount - discount_amount + commission_amount` 计算。
 
