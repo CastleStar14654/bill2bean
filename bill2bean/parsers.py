@@ -306,6 +306,8 @@ class WechatXlsxParser(BillParser):
             if not values or not values[0]:
                 continue
             row = dict(zip(headers, values))
+            if self._is_pending(row):
+                continue
             txs.append(self._parse_row(row))
         return txs
 
@@ -433,6 +435,10 @@ class WechatXlsxParser(BillParser):
             or "零钱通转出" in txn_type
             or "零钱提现" in txn_type
         )
+
+    @classmethod
+    def _is_pending(cls, row: dict[str, str]) -> bool:
+        return (row.get("当前状态") or "").strip() == "转出中，等待资金到账"
 
 
 class _TableParser(HTMLParser):
