@@ -281,6 +281,8 @@ def _build_transaction_draft(
             metadata.append(("share_amount", row["share_amount"]))
 
     direction = row.get("direction")
+    if cashbacks and direction != "expense":
+        raise ValueError(f"merge_cashback rows can only attach to expense rows{_row_context(row)}")
     if action == "reimburse":
         if direction != "expense":
             raise ValueError(f"action='reimburse' requires direction='expense'{_row_context(row)}")
