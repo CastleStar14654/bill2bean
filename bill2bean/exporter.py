@@ -208,19 +208,6 @@ def _parse_filter_date(value: str, option: str) -> date | None:
         raise ValueError(f"{option} is not a valid date") from exc
 
 
-def cashback_mapping(rows: list[ReviewRow]) -> dict[str, list[ReviewRow]]:
-    duplicate_redirects = _duplicate_parent_redirects(rows)
-    cashbacks: dict[str, list[ReviewRow]] = {}
-    for row in rows:
-        if row.action != "merge_cashback":
-            continue
-        parent_uid = row.reasons.cashback_parent_uid()
-        if parent_uid:
-            parent_uid = _redirect_parent_uid(parent_uid, duplicate_redirects)
-            cashbacks.setdefault(parent_uid, []).append(row)
-    return cashbacks
-
-
 def _duplicate_parent_redirects(rows: list[ReviewRow]) -> dict[str, str]:
     redirects: dict[str, str] = {}
     for row in rows:
@@ -297,7 +284,16 @@ class BeanExporter:
 
     @cached_property
     def cashback_by_parent(self) -> dict[str, list[ReviewRow]]:
-        return cashback_mapping(self.rows)
+        duplicate_redirects = _duplicate_parent_redirects(self.rows)
+        cashbacks: dict[str, list[ReviewRow]] = {}
+        for row in self.rows:
+            if row.action != "merge_cashback":
+                continue
+            parent_uid = row.reasons.cashback_parent_uid()
+            if parent_uid:
+                parent_uid = _redirect_parent_uid(parent_uid, duplicate_redirects)
+                cashbacks.setdefault(parent_uid, []).append(row)
+        return cashbacks
 
     def render(
         self,
@@ -655,10 +651,9 @@ class TransferPostings(TransactionPostings):
             self.row.get("uid", ""),
         )
         commission_amount = self.row.nonnegative_decimal_field("commission_amount", "0")
-        original_price = _transfer_original_price(self.row, self.currency)
-        if original_price:
+        if self.original_price:
             self.reject_original_adjustments(discount_amount, commission_amount)
-            original_amount, original_currency = original_price
+            original_amount, original_currency = self.original_price
             postings.append(
                 Posting.with_total_price(
                     self.row,
@@ -726,6 +721,25 @@ class TransferPostings(TransactionPostings):
             return "source_account", "income_account"
         return "expense_account", "source_account"
 
+    @cached_property
+    def original_price(self) -> tuple[Decimal, str] | None:
+        original_amount = self.row.get("original_amount")
+        original_currency = self.row.get("original_currency")
+        if original_amount:
+            original_currency = original_currency or "CNY"
+            if original_currency == self.currency:
+                raise ValueError(
+                    "transfer row original_currency matches currency"
+                    f"{self.row.context()}; remove original_amount/original_currency "
+                    "or correct the currency"
+                )
+            return self.row.decimal_field("original_amount"), original_currency
+        if original_currency:
+            raise ValueError(
+                f"original_amount and original_currency must be set together{self.row.context()}"
+            )
+        return None
+
     def reject_original_adjustments(
         self,
         discount_amount: Decimal,
@@ -744,19 +758,3 @@ class TransferPostings(TransactionPostings):
             f"{fields} {verb} not supported on transfer rows with "
             f"original_amount/original_currency{self.row.context()}"
         )
-
-
-def _transfer_original_price(row: ReviewRow, currency: str) -> tuple[Decimal, str] | None:
-    original_amount = row.get("original_amount")
-    original_currency = row.get("original_currency")
-    if original_amount:
-        original_currency = original_currency or "CNY"
-        if original_currency == currency:
-            raise ValueError(
-                "transfer row original_currency matches currency"
-                f"{row.context()}; remove original_amount/original_currency or correct the currency"
-            )
-        return row.decimal_field("original_amount"), original_currency
-    if original_currency:
-        raise ValueError(f"original_amount and original_currency must be set together{row.context()}")
-    return None
