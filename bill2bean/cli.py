@@ -7,10 +7,9 @@ import sys
 from .config import Config
 from .exporter import BeanExporter, ExportDefaults
 from .investments import (
+    InvestmentExporter,
     extract_price_directives,
     merge_price_directives,
-    render_fund_export,
-    required_accounts_for_fund_export,
 )
 from .ledger import TransactionList, extract_accounts, read_review_csv
 from .parsers import parser_for
@@ -144,15 +143,24 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    price_text = read_text_if_exists(args.price_output) if fund_enabled else ""
+    investment_exporter = (
+        InvestmentExporter(
+            filtered_rows,
+            args.fund_commodities,
+            price_text,
+            config.funds,
+            fetch_prices=args.fetch_fund_prices,
+            bean_price_command=args.bean_price_command,
+        )
+        if fund_enabled
+        else None
+    )
     try:
         if args.accounts:
             required_accounts = exporter.required_accounts()
-            if fund_enabled:
-                required_accounts |= required_accounts_for_fund_export(
-                    filtered_rows,
-                    args.fund_commodities,
-                    config.funds,
-                )
+            if investment_exporter:
+                required_accounts |= investment_exporter.required_accounts()
             missing = sorted(required_accounts - extract_accounts(args.accounts))
             if missing:
                 print("unknown accounts:", file=sys.stderr)
@@ -166,17 +174,9 @@ def main(argv: list[str] | None = None) -> int:
             investment_header_options=fund_enabled and args.with_header,
         )
         outputs: dict[str, list[str]] = {args.output: [normal_text]}
-        if fund_enabled:
-            price_text = read_text_if_exists(args.price_output)
+        if investment_exporter:
             existing_prices = extract_price_directives(price_text)
-            fund_result = render_fund_export(
-                filtered_rows,
-                args.fund_commodities,
-                price_text,
-                config.funds,
-                fetch_prices=args.fetch_fund_prices,
-                bean_price_command=args.bean_price_command,
-            )
+            fund_result = investment_exporter.render()
             if fund_result.transactions:
                 outputs.setdefault(args.fund_output, []).append(fund_result.transactions)
             if existing_prices or fund_result.prices:

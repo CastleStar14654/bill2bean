@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
+from functools import cached_property
 from pathlib import Path
 import re
 import subprocess
@@ -124,6 +125,91 @@ class InvestmentTransactionDraft:
         return "\n".join(lines) + "\n"
 
 
+@dataclass(frozen=True)
+class InvestmentExporter:
+    rows: list[ReviewRow]
+    commodities_path: str | Path
+    price_text: str
+    fund_config: FundConfig
+    fetch_prices: bool = False
+    bean_price_command: str = "bean-price"
+
+    @cached_property
+    def commodities(self) -> list[InvestmentCommodity]:
+        return parse_commodities(self.commodities_path)
+
+    @cached_property
+    def trades(self) -> list[FundTrade]:
+        return [
+            trade
+            for row in self.rows
+            if row.action == "invest"
+            for trade in [_fund_trade_for_row(row, self.commodities)]
+            if trade is not None
+        ]
+
+    @cached_property
+    def existing_prices(self) -> dict[tuple[str, str], Price]:
+        return parse_prices(self.price_text)
+
+    @cached_property
+    def missing_dates(self) -> list[date]:
+        return missing_price_dates(self.trades, self.fund_config, self.existing_prices)
+
+    @cached_property
+    def fetched_prices(self) -> str:
+        if not self.fetch_prices or not self.missing_dates:
+            return ""
+        return fetch_price_directives(
+            self.commodities_path,
+            self.missing_dates,
+            bean_price_command=self.bean_price_command,
+        )
+
+    @cached_property
+    def prices(self) -> dict[tuple[str, str], Price]:
+        return parse_prices(
+            "\n".join(part for part in [self.price_text, self.fetched_prices] if part)
+        )
+
+    @cached_property
+    def transaction_drafts(self) -> list[InvestmentTransactionDraft]:
+        return [
+            _fund_trade_draft(trade, self.fund_config, self.prices)
+            for trade in self.trades
+        ]
+
+    def render(self) -> FundExportResult:
+        rendered = [draft.format() for draft in self.transaction_drafts]
+        return FundExportResult(
+            transactions="\n".join(chunk for chunk in rendered if chunk).rstrip() + "\n"
+            if rendered
+            else "",
+            prices=self.fetched_prices.rstrip() + "\n" if self.fetched_prices.strip() else "",
+        )
+
+    def required_accounts(self) -> set[str]:
+        accounts: set[str] = set()
+        for trade in self.trades:
+            row = trade.row
+            account = self.fund_config.account_for_asset_class(trade.commodity.asset_class)
+            accounts.add(account)
+            accounts.add(row.source_account)
+            if trade.side == "sell":
+                accounts.add(
+                    self.fund_config.income_account_for_asset_class(
+                        trade.commodity.asset_class
+                    )
+                )
+            if row.commission_amount:
+                accounts.add(row.commission_account or self.fund_config.commission_account)
+            if DiscountAmount.parse(row.discount_amount).amount:
+                accounts.add(
+                    row.discount_account or self.fund_config.discount_income_account
+                )
+        return {account for account in accounts if account}
+
+
 def render_fund_export(
     rows: list[ReviewRow],
     commodities_path: str | Path,
@@ -132,31 +218,14 @@ def render_fund_export(
     fetch_prices: bool = False,
     bean_price_command: str = "bean-price",
 ) -> FundExportResult:
-    commodities = parse_commodities(commodities_path)
-    trades = [
-        trade
-        for row in rows
-        if row.action == "invest"
-        for trade in [_fund_trade_for_row(row, commodities)]
-        if trade is not None
-    ]
-    existing_prices = parse_prices(price_text)
-    missing_dates = missing_price_dates(trades, fund_config, existing_prices)
-    fetched_prices = ""
-    if fetch_prices and missing_dates:
-        fetched_prices = fetch_price_directives(
-            commodities_path,
-            missing_dates,
-            bean_price_command=bean_price_command,
-        )
-    prices = parse_prices("\n".join(part for part in [price_text, fetched_prices] if part))
-    rendered = [_fund_trade_draft(trade, fund_config, prices).format() for trade in trades]
-    return FundExportResult(
-        transactions="\n".join(chunk for chunk in rendered if chunk).rstrip() + "\n"
-        if rendered
-        else "",
-        prices=fetched_prices.rstrip() + "\n" if fetched_prices.strip() else "",
-    )
+    return InvestmentExporter(
+        rows,
+        commodities_path,
+        price_text,
+        fund_config,
+        fetch_prices=fetch_prices,
+        bean_price_command=bean_price_command,
+    ).render()
 
 
 def required_accounts_for_fund_export(
@@ -164,24 +233,7 @@ def required_accounts_for_fund_export(
     commodities_path: str | Path,
     fund_config: FundConfig,
 ) -> set[str]:
-    commodities = parse_commodities(commodities_path)
-    accounts: set[str] = set()
-    for row in rows:
-        if row.action != "invest":
-            continue
-        trade = _fund_trade_for_row(row, commodities)
-        if trade is None:
-            continue
-        account = fund_config.account_for_asset_class(trade.commodity.asset_class)
-        accounts.add(account)
-        accounts.add(row.source_account)
-        if trade.side == "sell":
-            accounts.add(fund_config.income_account_for_asset_class(trade.commodity.asset_class))
-        if row.commission_amount:
-            accounts.add(row.commission_account or fund_config.commission_account)
-        if DiscountAmount.parse(row.discount_amount).amount:
-            accounts.add(row.discount_account or fund_config.discount_income_account)
-    return {account for account in accounts if account}
+    return InvestmentExporter(rows, commodities_path, "", fund_config).required_accounts()
 
 
 def parse_commodities(path: str | Path) -> list[InvestmentCommodity]:
