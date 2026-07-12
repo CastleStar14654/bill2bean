@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 
 from .accounts import account_kind
+from .beancount_format import escape_directive_value, format_tags_links, quote
 from .discounts import parse_deduction_discount_amount
 from .ledger import ReviewRow, read_review_csv
 
@@ -96,12 +97,12 @@ class TransactionDraft:
     tags_links: str = ""
 
     def format(self) -> str:
-        payee = _quote(self.payee)
-        narration = _quote(self.narration)
+        payee = quote(self.payee)
+        narration = quote(self.narration)
         suffix = f" {self.tags_links}" if self.tags_links else ""
         lines = [f"{self.date} * {payee} {narration}{suffix}"]
         for key, value in self.metadata:
-            lines.append(f"  {key}: {_quote(value)}")
+            lines.append(f"  {key}: {quote(value)}")
         implicit_index = self.implicit_posting_index()
         for index, posting in enumerate(self.postings):
             flag = f"{posting.flag} " if posting.flag else ""
@@ -247,13 +248,13 @@ def _format_header(
 ) -> list[str]:
     lines: list[str] = []
     if include_accounts:
-        lines.append(f'include "{_escape_directive_value(include_accounts)}"')
+        lines.append(f'include "{escape_directive_value(include_accounts)}"')
     for include_file in include_files:
         if include_file:
-            lines.append(f'include "{_escape_directive_value(include_file)}"')
+            lines.append(f'include "{escape_directive_value(include_file)}"')
     if operating_currency:
         lines.append(
-            f'option "operating_currency" "{_escape_directive_value(operating_currency)}"'
+            f'option "operating_currency" "{escape_directive_value(operating_currency)}"'
         )
     if include_accounts or include_files or operating_currency or investment_header_options:
         lines.append('option "render_commas" "True"')
@@ -435,7 +436,7 @@ class BeanExporter:
             narration=row["narration"],
             metadata=metadata,
             postings=postings,
-            tags_links=_tags_links(row),
+            tags_links=format_tags_links(row.get("tags", ""), row.get("links", "")),
         )
 
     def required_account(
@@ -743,30 +744,6 @@ class TransferPostings(TransactionPostings):
             f"{fields} {verb} not supported on transfer rows with "
             f"original_amount/original_currency{self.row.context()}"
         )
-
-
-def _quote(value: str) -> str:
-    return '"' + (value or "").replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
-def _escape_directive_value(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"')
-
-
-def _tags_links(row: ReviewRow) -> str:
-    tags = [_prefixed_token(token, "#") for token in _split_tokens(row.get("tags", ""))]
-    links = [_prefixed_token(token, "^") for token in _split_tokens(row.get("links", ""))]
-    return " ".join(tags + links)
-
-
-def _split_tokens(value: str) -> list[str]:
-    return [part for part in re.split(r"[\s,;]+", value.strip()) if part]
-
-
-def _prefixed_token(value: str, prefix: str) -> str:
-    if value.startswith(prefix):
-        return value
-    return prefix + value
 
 
 def _transfer_original_price(row: ReviewRow, currency: str) -> tuple[Decimal, str] | None:

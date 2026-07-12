@@ -10,9 +10,9 @@ import sys
 
 from tqdm import tqdm
 
+from .beancount_format import format_decimal, quote
 from .config import FundConfig
 from .discounts import DiscountAmount
-from .exporter import _quote
 from .ledger import ReviewRow
 
 
@@ -311,29 +311,29 @@ def _format_fund_trade(
     prices: dict[tuple[str, str], Price],
 ) -> str:
     row = trade.row
-    amount = _decimal(row.amount)
+    amount = row.decimal_field("amount")
     price_date = _price_date_for_trade(trade, fund_config).isoformat()
     price = _price_for_trade(row, trade.commodity, price_date, prices)
     account = fund_config.account_for_asset_class(trade.commodity.asset_class)
     currency = row.currency or "CNY"
     discount = DiscountAmount.parse(row.discount_amount)
     discount_account = row.discount_account or fund_config.discount_income_account
-    commission_amount = _decimal(row.commission_amount or "0")
+    commission_amount = row.nonnegative_decimal_field("commission_amount", "0")
     commission_account = row.commission_account or fund_config.commission_account
     net_fee = commission_amount - discount.fee_deduction
     trade_amount = amount - net_fee if trade.side == "buy" else amount + net_fee
-    lines = [f"{row.posting_date} * {_quote(row.payee)} {_quote(_fund_narration(row, trade))}"]
-    lines.append(f"  source: {_quote(row.source)}")
-    lines.append(f"  import_id: {_quote(row.uid)}")
-    lines.append(f"  price_date: {_quote(price_date)}")
+    lines = [f"{row.posting_date} * {quote(row.payee)} {quote(_fund_narration(row, trade))}"]
+    lines.append(f"  source: {quote(row.source)}")
+    lines.append(f"  import_id: {quote(row.uid)}")
+    lines.append(f"  price_date: {quote(price_date)}")
     if trade.side == "buy":
         if price:
             units = _units(row, trade_amount, price.amount, fund_config.share_precision)
             lines.append(
-                f"  {account}  {units} {trade.commodity.symbol} {{{_format_decimal(price.amount)} {price.currency}}}"
+                f"  {account}  {units} {trade.commodity.symbol} {{{format_decimal(price.amount)} {price.currency}}}"
             )
         else:
-            lines.append(f"  ! {account}  {_format_decimal(trade_amount)} {currency}")
+            lines.append(f"  ! {account}  {format_decimal(trade_amount)} {currency}")
         lines.extend(
             _fee_postings(
                 discount,
@@ -344,14 +344,14 @@ def _format_fund_trade(
                 currency,
             )
         )
-        lines.append(f"  {row.source_account}  -{_format_decimal(amount)} {currency}")
+        lines.append(f"  {row.source_account}  -{format_decimal(amount)} {currency}")
     else:
         if price:
             units = _units(row, trade_amount, price.amount, fund_config.share_precision)
             lines.append(f"  {account}  -{units} {trade.commodity.symbol} {{}}")
         else:
-            lines.append(f"  ! {account}  -{_format_decimal(trade_amount)} {currency}")
-        lines.append(f"  {row.source_account}  {_format_decimal(amount)} {currency}")
+            lines.append(f"  ! {account}  -{format_decimal(trade_amount)} {currency}")
+        lines.append(f"  {row.source_account}  {format_decimal(amount)} {currency}")
         lines.extend(
             _fee_postings(
                 discount,
@@ -376,12 +376,12 @@ def _fee_postings(
 ) -> list[str]:
     lines: list[str] = []
     if commission_amount:
-        lines.append(f"  {commission_account}  {_format_decimal(commission_amount)} {currency}")
+        lines.append(f"  {commission_account}  {format_decimal(commission_amount)} {currency}")
     discount_amount = discount.amount
     if discount_amount:
         if discount.is_cashback:
-            lines.append(f"  {source_account}  {_format_decimal(discount_amount)} {currency}")
-        lines.append(f"  {discount_account}  -{_format_decimal(discount_amount)} {currency}")
+            lines.append(f"  {source_account}  {format_decimal(discount_amount)} {currency}")
+        lines.append(f"  {discount_account}  -{format_decimal(discount_amount)} {currency}")
     return lines
 
 
@@ -392,7 +392,7 @@ def _price_for_trade(
     prices: dict[tuple[str, str], Price],
 ) -> Price | None:
     if row.investment_price:
-        return Price(_decimal(row.investment_price), "CNY")
+        return Price(row.decimal_field("investment_price"), "CNY")
     return prices.get((price_date, commodity.symbol))
 
 
@@ -411,14 +411,6 @@ def _units(
 def _fund_narration(row: ReviewRow, trade: FundTrade) -> str:
     marker = "买入" if trade.side == "buy" else "卖出"
     return f"{trade.commodity.name}-{marker}"
-
-
-def _format_decimal(value: Decimal) -> str:
-    return format(value, "f")
-
-
-def _decimal(value: str) -> Decimal:
-    return Decimal((value or "0").replace(",", ""))
 
 
 def _metadata_int(metadata: dict[str, str], key: str) -> int | None:
