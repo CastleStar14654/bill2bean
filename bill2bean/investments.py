@@ -108,6 +108,22 @@ class InvestmentPosting:
         return line
 
 
+@dataclass(frozen=True)
+class InvestmentTransactionDraft:
+    date: str
+    payee: str
+    narration: str
+    metadata: list[tuple[str, str]]
+    postings: list[InvestmentPosting]
+
+    def format(self) -> str:
+        lines = [f"{self.date} * {quote(self.payee)} {quote(self.narration)}"]
+        for key, value in self.metadata:
+            lines.append(f"  {key}: {quote(value)}")
+        lines.extend(posting.format() for posting in self.postings)
+        return "\n".join(lines) + "\n"
+
+
 def render_fund_export(
     rows: list[ReviewRow],
     commodities_path: str | Path,
@@ -134,7 +150,7 @@ def render_fund_export(
             bean_price_command=bean_price_command,
         )
     prices = parse_prices("\n".join(part for part in [price_text, fetched_prices] if part))
-    rendered = [_format_fund_trade(trade, fund_config, prices) for trade in trades]
+    rendered = [_fund_trade_draft(trade, fund_config, prices).format() for trade in trades]
     return FundExportResult(
         transactions="\n".join(chunk for chunk in rendered if chunk).rstrip() + "\n"
         if rendered
@@ -361,11 +377,11 @@ def _fund_trade_for_row(
     return None
 
 
-def _format_fund_trade(
+def _fund_trade_draft(
     trade: FundTrade,
     fund_config: FundConfig,
     prices: dict[tuple[str, str], Price],
-) -> str:
+) -> InvestmentTransactionDraft:
     row = trade.row
     amount = row.decimal_field("amount")
     price_date = _price_date_for_trade(trade, fund_config).isoformat()
@@ -378,10 +394,11 @@ def _format_fund_trade(
     commission_account = row.commission_account or fund_config.commission_account
     net_fee = commission_amount - discount.fee_deduction
     trade_amount = amount - net_fee if trade.side == "buy" else amount + net_fee
-    lines = [f"{row.posting_date} * {quote(row.payee)} {quote(_fund_narration(row, trade))}"]
-    lines.append(f"  source: {quote(row.source)}")
-    lines.append(f"  import_id: {quote(row.uid)}")
-    lines.append(f"  price_date: {quote(price_date)}")
+    metadata = [
+        ("source", row.source),
+        ("import_id", row.uid),
+        ("price_date", price_date),
+    ]
     postings: list[InvestmentPosting] = []
     if trade.side == "buy":
         if price:
@@ -434,8 +451,13 @@ def _format_fund_trade(
                 fund_config.income_account_for_asset_class(trade.commodity.asset_class)
             )
         )
-    lines.extend(posting.format() for posting in postings)
-    return "\n".join(lines) + "\n"
+    return InvestmentTransactionDraft(
+        date=row.posting_date,
+        payee=row.payee,
+        narration=_fund_narration(row, trade),
+        metadata=metadata,
+        postings=postings,
+    )
 
 
 def _fee_postings(
