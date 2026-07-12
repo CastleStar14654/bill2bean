@@ -52,6 +52,62 @@ class FundExportResult:
     prices: str
 
 
+@dataclass(frozen=True)
+class InvestmentPosting:
+    account: str
+    amount: str = ""
+    currency: str = ""
+    cost: str = ""
+    flagged: bool = False
+
+    @classmethod
+    def amount_posting(
+        cls,
+        account: str,
+        amount: Decimal,
+        currency: str,
+        flagged: bool = False,
+    ) -> "InvestmentPosting":
+        return cls(account, format_decimal(amount), currency, flagged=flagged)
+
+    @classmethod
+    def units_with_cost(
+        cls,
+        account: str,
+        units: str,
+        commodity: str,
+        price: Price,
+    ) -> "InvestmentPosting":
+        return cls(
+            account,
+            units,
+            commodity,
+            cost=f"{{{format_decimal(price.amount)} {price.currency}}}",
+        )
+
+    @classmethod
+    def units_empty_cost(
+        cls,
+        account: str,
+        units: str,
+        commodity: str,
+    ) -> "InvestmentPosting":
+        return cls(account, units, commodity, cost="{}")
+
+    @classmethod
+    def balancing(cls, account: str) -> "InvestmentPosting":
+        return cls(account)
+
+    def format(self) -> str:
+        flag = "! " if self.flagged else ""
+        line = f"  {flag}{self.account}"
+        if self.amount and self.currency:
+            line += f"  {self.amount} {self.currency}"
+        if self.cost:
+            line += f" {self.cost}"
+        return line
+
+
 def render_fund_export(
     rows: list[ReviewRow],
     commodities_path: str | Path,
@@ -326,15 +382,18 @@ def _format_fund_trade(
     lines.append(f"  source: {quote(row.source)}")
     lines.append(f"  import_id: {quote(row.uid)}")
     lines.append(f"  price_date: {quote(price_date)}")
+    postings: list[InvestmentPosting] = []
     if trade.side == "buy":
         if price:
             units = _units(row, trade_amount, price.amount, fund_config.share_precision)
-            lines.append(
-                f"  {account}  {units} {trade.commodity.symbol} {{{format_decimal(price.amount)} {price.currency}}}"
+            postings.append(
+                InvestmentPosting.units_with_cost(account, units, trade.commodity.symbol, price)
             )
         else:
-            lines.append(f"  ! {account}  {format_decimal(trade_amount)} {currency}")
-        lines.extend(
+            postings.append(
+                InvestmentPosting.amount_posting(account, trade_amount, currency, flagged=True)
+            )
+        postings.extend(
             _fee_postings(
                 discount,
                 discount_account,
@@ -344,15 +403,23 @@ def _format_fund_trade(
                 currency,
             )
         )
-        lines.append(f"  {row.source_account}  -{format_decimal(amount)} {currency}")
+        postings.append(InvestmentPosting.amount_posting(row.source_account, -amount, currency))
     else:
         if price:
             units = _units(row, trade_amount, price.amount, fund_config.share_precision)
-            lines.append(f"  {account}  -{units} {trade.commodity.symbol} {{}}")
+            postings.append(
+                InvestmentPosting.units_empty_cost(
+                    account,
+                    f"-{units}",
+                    trade.commodity.symbol,
+                )
+            )
         else:
-            lines.append(f"  ! {account}  -{format_decimal(trade_amount)} {currency}")
-        lines.append(f"  {row.source_account}  {format_decimal(amount)} {currency}")
-        lines.extend(
+            postings.append(
+                InvestmentPosting.amount_posting(account, -trade_amount, currency, flagged=True)
+            )
+        postings.append(InvestmentPosting.amount_posting(row.source_account, amount, currency))
+        postings.extend(
             _fee_postings(
                 discount,
                 discount_account,
@@ -362,7 +429,12 @@ def _format_fund_trade(
                 currency,
             )
         )
-        lines.append(f"  {fund_config.income_account_for_asset_class(trade.commodity.asset_class)}")
+        postings.append(
+            InvestmentPosting.balancing(
+                fund_config.income_account_for_asset_class(trade.commodity.asset_class)
+            )
+        )
+    lines.extend(posting.format() for posting in postings)
     return "\n".join(lines) + "\n"
 
 
@@ -373,16 +445,22 @@ def _fee_postings(
     commission_account: str,
     source_account: str,
     currency: str,
-) -> list[str]:
-    lines: list[str] = []
+) -> list[InvestmentPosting]:
+    postings: list[InvestmentPosting] = []
     if commission_amount:
-        lines.append(f"  {commission_account}  {format_decimal(commission_amount)} {currency}")
+        postings.append(
+            InvestmentPosting.amount_posting(commission_account, commission_amount, currency)
+        )
     discount_amount = discount.amount
     if discount_amount:
         if discount.is_cashback:
-            lines.append(f"  {source_account}  {format_decimal(discount_amount)} {currency}")
-        lines.append(f"  {discount_account}  -{format_decimal(discount_amount)} {currency}")
-    return lines
+            postings.append(
+                InvestmentPosting.amount_posting(source_account, discount_amount, currency)
+            )
+        postings.append(
+            InvestmentPosting.amount_posting(discount_account, -discount_amount, currency)
+        )
+    return postings
 
 
 def _price_for_trade(
