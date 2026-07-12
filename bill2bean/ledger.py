@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import re
 
@@ -131,6 +131,33 @@ class ReviewRow:
 
     def get(self, key: str, default: str = "") -> str:
         return getattr(self, key, default)
+
+    def context(self) -> str:
+        if self.uid:
+            return f" for row {self.uid}"
+        details = " ".join(part for part in [self.time, self.payee] if part)
+        return f" for {details}" if details else ""
+
+    def decimal_field(self, field: str, default: str | None = None) -> Decimal:
+        value = self.get(field)
+        if value is None or value == "":
+            if default is None:
+                raise ValueError(f"missing {field}{self.context()}")
+            value = default
+        try:
+            return Decimal(value.replace(",", ""))
+        except (InvalidOperation, ValueError) as exc:
+            raise ValueError(f"invalid decimal {field}={value!r}{self.context()}") from exc
+
+    def nonnegative_decimal_field(
+        self,
+        field: str,
+        default: str | None = None,
+    ) -> Decimal:
+        value = self.decimal_field(field, default)
+        if value < 0:
+            raise ValueError(f"{field} must be non-negative{self.context()}")
+        return value
 
     def __getitem__(self, key: str) -> str:
         return getattr(self, key)

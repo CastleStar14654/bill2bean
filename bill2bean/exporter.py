@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from functools import cached_property
 from pathlib import Path
 import re
@@ -43,10 +43,10 @@ class Posting:
         original_currency = row.get("original_currency")
         if bool(original_amount) != bool(original_currency):
             raise ValueError(
-                f"original_amount and original_currency must be set together{_row_context(row)}"
+                f"original_amount and original_currency must be set together{row.context()}"
             )
         if original_amount and original_currency and original_currency != currency:
-            original_posting_amount = _decimal_field(row, "original_amount")
+            original_posting_amount = row.decimal_field("original_amount")
             if amount < 0 < original_posting_amount:
                 original_posting_amount = -original_posting_amount
                 amount = -amount
@@ -346,9 +346,9 @@ class BeanExporter:
         if action in {"skip", "merge_cashback", "invest"}:
             return None
         if action not in {"post", "reimburse", "transfer"}:
-            raise ValueError(f"unsupported action {action!r}{_row_context(row)}")
+            raise ValueError(f"unsupported action {action!r}{row.context()}")
 
-        amount = _decimal_field(row, "amount")
+        amount = row.decimal_field("amount")
         currency = row.get("currency") or "CNY"
         metadata: list[tuple[str, str]] = []
         if row.get("source") or row.get("uid"):
@@ -380,12 +380,12 @@ class BeanExporter:
         direction = row.get("direction")
         if cashbacks and direction != "expense":
             raise ValueError(
-                f"merge_cashback rows can only attach to expense rows{_row_context(row)}"
+                f"merge_cashback rows can only attach to expense rows{row.context()}"
             )
         if row.action == "reimburse":
             if direction != "expense":
                 raise ValueError(
-                    f"action='reimburse' requires direction='expense'{_row_context(row)}"
+                    f"action='reimburse' requires direction='expense'{row.context()}"
                 )
             return OutflowPostings(
                 self,
@@ -402,7 +402,7 @@ class BeanExporter:
             if direction not in {"transfer", "income"}:
                 raise ValueError(
                     "action='transfer' requires direction='transfer' or direction='income'"
-                    f"{_row_context(row)}"
+                    f"{row.context()}"
                 )
             return TransferPostings(self, row, amount, currency)
         if direction == "expense":
@@ -421,7 +421,7 @@ class BeanExporter:
             return IncomePostings(self, row, amount, currency)
         if direction == "transfer":
             return TransferPostings(self, row, amount, currency)
-        raise ValueError(f"unsupported direction {direction!r}{_row_context(row)}")
+        raise ValueError(f"unsupported direction {direction!r}{row.context()}")
 
     def draft(
         self,
@@ -445,7 +445,7 @@ class BeanExporter:
     ) -> str:
         account = row.get(field, "") or self.defaults.account_for(field)
         if not account:
-            raise ValueError(f"missing required {field}{_row_context(row)}")
+            raise ValueError(f"missing required {field}{row.context()}")
         return account
 
 
@@ -468,7 +468,7 @@ class TransactionPostings:
             return
         raise ValueError(
             f"{', '.join(present)} {'is' if len(present) == 1 else 'are'} "
-            f"not supported on {context}{_row_context(self.row)}"
+            f"not supported on {context}{self.row.context()}"
         )
 
 
@@ -555,7 +555,7 @@ class OutflowPostings(TransactionPostings):
         return postings
 
     def aa_amount(self) -> Decimal:
-        return _nonnegative_decimal_field(self.row, "aa_amount", "0")
+        return self.row.nonnegative_decimal_field("aa_amount", "0")
 
     def reject_priced_split(self, aa_amount: Decimal, share_amount: Decimal) -> None:
         if not self.row.get("original_amount") and not self.row.get("original_currency"):
@@ -563,11 +563,11 @@ class OutflowPostings(TransactionPostings):
         if aa_amount:
             raise ValueError(
                 "aa_amount is not supported with original_amount/original_currency"
-                f"{_row_context(self.row)}"
+                f"{self.row.context()}"
             )
         if share_amount:
             raise ValueError(
-                f"share is not supported with original_amount/original_currency{_row_context(self.row)}"
+                f"share is not supported with original_amount/original_currency{self.row.context()}"
             )
 
     def share_amount(self, aa_amount: Decimal) -> Decimal:
@@ -578,7 +578,7 @@ class OutflowPostings(TransactionPostings):
         share_amount = (self.row.get("share_amount") or "").strip()
         if share_amount and share != "custom":
             raise ValueError(
-                f"share_amount is only allowed with share='custom'{_row_context(self.row)}"
+                f"share_amount is only allowed with share='custom'{self.row.context()}"
             )
         if not share:
             return Decimal("0")
@@ -588,9 +588,9 @@ class OutflowPostings(TransactionPostings):
             return self.amount - aa_amount
         if share == "custom":
             if not share_amount:
-                raise ValueError(f"share='custom' requires share_amount{_row_context(self.row)}")
-            return _nonnegative_decimal_field(self.row, "share_amount")
-        raise ValueError(f"unsupported share value {share!r}{_row_context(self.row)}")
+                raise ValueError(f"share='custom' requires share_amount{self.row.context()}")
+            return self.row.nonnegative_decimal_field("share_amount")
+        raise ValueError(f"unsupported share value {share!r}{self.row.context()}")
 
     def apply_cashbacks(
         self,
@@ -598,7 +598,7 @@ class OutflowPostings(TransactionPostings):
         source_amount: Decimal,
     ) -> Decimal:
         for cashback in self.cashbacks:
-            cb_amount = _decimal_field(cashback, "amount")
+            cb_amount = cashback.decimal_field("amount")
             source_amount -= cb_amount
             income_account = self.exporter.required_account(cashback, "income_account")
             postings.append(Posting.plain(self.row, income_account, -cb_amount, self.currency))
@@ -634,12 +634,12 @@ class IncomePostings(TransactionPostings):
         if self.row.get("original_amount") and self.row.get("original_currency"):
             raise ValueError(
                 "income row with original_amount/original_currency is ambiguous"
-                f"{_row_context(self.row)}; convert it to action=transfer,direction=transfer "
+                f"{self.row.context()}; convert it to action=transfer,direction=transfer "
                 "and set source_account and expense_account, or use "
                 "action=transfer,direction=income with income_account as the transfer source"
             )
         raise ValueError(
-            f"original_amount and original_currency must be set together{_row_context(self.row)}"
+            f"original_amount and original_currency must be set together{self.row.context()}"
         )
 
 
@@ -653,7 +653,7 @@ class TransferPostings(TransactionPostings):
             self.row.get("discount_amount", ""),
             self.row.get("uid", ""),
         )
-        commission_amount = _nonnegative_decimal_field(self.row, "commission_amount", "0")
+        commission_amount = self.row.nonnegative_decimal_field("commission_amount", "0")
         original_price = _transfer_original_price(self.row, self.currency)
         if original_price:
             self.reject_original_adjustments(discount_amount, commission_amount)
@@ -741,7 +741,7 @@ class TransferPostings(TransactionPostings):
         verb = "is" if len(unsupported_fields) == 1 else "are"
         raise ValueError(
             f"{fields} {verb} not supported on transfer rows with "
-            f"original_amount/original_currency{_row_context(self.row)}"
+            f"original_amount/original_currency{self.row.context()}"
         )
 
 
@@ -777,39 +777,9 @@ def _transfer_original_price(row: ReviewRow, currency: str) -> tuple[Decimal, st
         if original_currency == currency:
             raise ValueError(
                 "transfer row original_currency matches currency"
-                f"{_row_context(row)}; remove original_amount/original_currency or correct the currency"
+                f"{row.context()}; remove original_amount/original_currency or correct the currency"
             )
-        return _decimal_field(row, "original_amount"), original_currency
+        return row.decimal_field("original_amount"), original_currency
     if original_currency:
-        raise ValueError(f"original_amount and original_currency must be set together{_row_context(row)}")
+        raise ValueError(f"original_amount and original_currency must be set together{row.context()}")
     return None
-
-
-def _decimal_field(row: ReviewRow, field: str, default: str | None = None) -> Decimal:
-    value = row.get(field)
-    if value is None or value == "":
-        if default is None:
-            raise ValueError(f"missing {field}{_row_context(row)}")
-        value = default
-    try:
-        return Decimal(value.replace(",", ""))
-    except (InvalidOperation, ValueError) as exc:
-        raise ValueError(f"invalid decimal {field}={value!r}{_row_context(row)}") from exc
-
-
-def _nonnegative_decimal_field(
-    row: ReviewRow,
-    field: str,
-    default: str | None = None,
-) -> Decimal:
-    value = _decimal_field(row, field, default)
-    if value < 0:
-        raise ValueError(f"{field} must be non-negative{_row_context(row)}")
-    return value
-
-
-def _row_context(row: ReviewRow) -> str:
-    if row.get("uid"):
-        return f" for row {row.get('uid')}"
-    details = " ".join(part for part in [row.get("time"), row.get("payee")] if part)
-    return f" for {details}" if details else ""
