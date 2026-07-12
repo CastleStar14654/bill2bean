@@ -431,252 +431,62 @@ class BeanExporter:
             if row.get("share_amount"):
                 metadata.append(("share_amount", row["share_amount"]))
 
+        builder = self.posting_builder_for(row, cashbacks, amount, currency)
+        postings = builder.build()
+        return self.draft(row, metadata, postings)
+
+    def posting_builder_for(
+        self,
+        row: ReviewRow,
+        cashbacks: list[ReviewRow],
+        amount: Decimal,
+        currency: str,
+    ) -> TransactionPostings:
         direction = row.get("direction")
         if cashbacks and direction != "expense":
             raise ValueError(
                 f"merge_cashback rows can only attach to expense rows{_row_context(row)}"
             )
-        if action == "reimburse":
+        if row.action == "reimburse":
             if direction != "expense":
                 raise ValueError(
                     f"action='reimburse' requires direction='expense'{_row_context(row)}"
                 )
-            postings = self.build_reimburse_postings(row, cashbacks, amount, currency)
-        elif action == "transfer":
+            return OutflowPostings(
+                self,
+                row,
+                amount,
+                currency,
+                cashbacks,
+                target_account_field="receivable_account",
+                allow_share=False,
+                rejected_fields=("share", "share_amount", "commission_amount"),
+                reject_context="reimburse rows",
+            )
+        if row.action == "transfer":
             if direction not in {"transfer", "income"}:
                 raise ValueError(
                     "action='transfer' requires direction='transfer' or direction='income'"
                     f"{_row_context(row)}"
                 )
-            postings = self.build_transfer_postings(row, amount, currency)
-        elif direction == "expense":
-            postings = self.build_expense_postings(row, cashbacks, amount, currency)
-        elif direction == "income":
-            postings = self.build_income_postings(row, amount, currency)
-        elif direction == "transfer":
-            postings = self.build_transfer_postings(row, amount, currency)
-        else:
-            raise ValueError(f"unsupported direction {direction!r}{_row_context(row)}")
-        return self.draft(row, metadata, postings)
-
-    def build_reimburse_postings(
-        self,
-        row: ReviewRow,
-        cashbacks: list[ReviewRow],
-        amount: Decimal,
-        currency: str,
-    ) -> list[Posting]:
-        _reject_present_fields(
-            row,
-            ("share", "share_amount", "commission_amount"),
-            "reimburse rows",
-        )
-        return self.build_outflow_postings(
-            row,
-            cashbacks,
-            amount,
-            currency,
-            target_account_field="receivable_account",
-            aa_amount=_nonnegative_decimal_field(row, "aa_amount", "0"),
-            share_amount=Decimal("0"),
-        )
-
-    def build_expense_postings(
-        self,
-        row: ReviewRow,
-        cashbacks: list[ReviewRow],
-        amount: Decimal,
-        currency: str,
-    ) -> list[Posting]:
-        _reject_present_fields(row, ("commission_amount",), "expense rows")
-        aa_amount = _nonnegative_decimal_field(row, "aa_amount", "0")
-        return self.build_outflow_postings(
-            row,
-            cashbacks,
-            amount,
-            currency,
-            target_account_field="expense_account",
-            aa_amount=aa_amount,
-            share_amount=_share_receivable_amount(row, amount - aa_amount),
-        )
-
-    def build_outflow_postings(
-        self,
-        row: ReviewRow,
-        cashbacks: list[ReviewRow],
-        amount: Decimal,
-        currency: str,
-        target_account_field: str,
-        aa_amount: Decimal,
-        share_amount: Decimal,
-    ) -> list[Posting]:
-        postings: list[Posting] = []
-        source_amount = amount
-        discount_amount = parse_deduction_discount_amount(
-            row.get("discount_amount", ""),
-            row.get("uid", ""),
-        )
-        gross_amount = amount + discount_amount if amount >= 0 else amount - discount_amount
-        _reject_priced_split(row, aa_amount, share_amount)
-        target_amount = gross_amount - aa_amount - share_amount
-        if aa_amount or share_amount:
-            if target_amount:
-                postings.append(
-                    Posting.plain(
-                        row,
-                        self.required_account(row, target_account_field),
-                        target_amount,
-                        currency,
-                    )
-                )
-            if aa_amount:
-                postings.append(
-                    Posting.plain(
-                        row,
-                        self.required_account(row, "aa_account"),
-                        aa_amount,
-                        currency,
-                    )
-                )
-            if share_amount:
-                postings.append(
-                    Posting.plain(
-                        row,
-                        self.required_account(row, "share_account"),
-                        share_amount,
-                        currency,
-                    )
-                )
-        else:
-            postings.append(
-                Posting.from_expense_amount_fields(
-                    row,
-                    self.required_account(row, target_account_field),
-                    gross_amount,
-                    currency,
-                )
-            )
-        if discount_amount:
-            postings.append(
-                Posting.plain(
-                    row,
-                    self.required_account(row, "discount_account"),
-                    -discount_amount,
-                    currency,
-                )
-            )
-        source_amount = self.apply_cashbacks(row, cashbacks, postings, source_amount, currency)
-        postings.append(
-            Posting.plain(
+            return TransferPostings(self, row, amount, currency)
+        if direction == "expense":
+            return OutflowPostings(
+                self,
                 row,
-                self.required_account(row, "source_account"),
-                -source_amount,
+                amount,
                 currency,
+                cashbacks,
+                target_account_field="expense_account",
+                allow_share=True,
+                rejected_fields=("commission_amount",),
+                reject_context="expense rows",
             )
-        )
-        return postings
-
-    def build_income_postings(
-        self,
-        row: ReviewRow,
-        amount: Decimal,
-        currency: str,
-    ) -> list[Posting]:
-        _reject_present_fields(
-            row,
-            ("aa_amount", "share", "share_amount", "discount_amount", "commission_amount"),
-            "income rows",
-        )
-        _reject_priced_income_row(row)
-        return [
-            Posting.plain(row, self.required_account(row, "source_account"), amount, currency),
-            Posting.plain(row, self.required_account(row, "income_account"), -amount, currency),
-        ]
-
-    def build_transfer_postings(
-        self,
-        row: ReviewRow,
-        amount: Decimal,
-        currency: str,
-    ) -> list[Posting]:
-        _reject_present_fields(row, ("aa_amount", "share", "share_amount"), "transfer rows")
-        target_field, source_field = self.transfer_account_fields(row)
-        postings: list[Posting] = []
-        discount_amount = parse_deduction_discount_amount(
-            row.get("discount_amount", ""),
-            row.get("uid", ""),
-        )
-        commission_amount = _nonnegative_decimal_field(row, "commission_amount", "0")
-        original_price = _transfer_original_price(row, currency)
-        if original_price:
-            _reject_original_transfer_adjustments(row, discount_amount, commission_amount)
-            original_amount, original_currency = original_price
-            postings.append(
-                Posting.with_total_price(
-                    row,
-                    self.required_account(row, target_field),
-                    amount,
-                    currency,
-                    original_amount,
-                    original_currency,
-                )
-            )
-            postings.append(
-                Posting.plain(
-                    row,
-                    self.required_account(row, source_field),
-                    -original_amount,
-                    original_currency,
-                )
-            )
-            return postings
-
-        if row.direction == "income":
-            target_amount = amount
-            source_amount = amount - discount_amount + commission_amount
-        else:
-            target_amount = amount + discount_amount - commission_amount
-            source_amount = amount
-        postings.append(
-            Posting.plain(
-                row,
-                self.required_account(row, target_field),
-                target_amount,
-                currency,
-            )
-        )
-        if discount_amount:
-            postings.append(
-                Posting.plain(
-                    row,
-                    self.required_account(row, "discount_account"),
-                    -discount_amount,
-                    currency,
-                )
-            )
-        if commission_amount:
-            postings.append(
-                Posting.plain(
-                    row,
-                    self.required_account(row, "commission_account"),
-                    commission_amount,
-                    currency,
-                )
-            )
-        postings.append(
-            Posting.plain(
-                row,
-                self.required_account(row, source_field),
-                -source_amount,
-                currency,
-            )
-        )
-        return postings
-
-    def transfer_account_fields(self, row: ReviewRow) -> tuple[str, str]:
-        if row.direction == "income":
-            return "source_account", "income_account"
-        return "expense_account", "source_account"
+        if direction == "income":
+            return IncomePostings(self, row, amount, currency)
+        if direction == "transfer":
+            return TransferPostings(self, row, amount, currency)
+        raise ValueError(f"unsupported direction {direction!r}{_row_context(row)}")
 
     def draft(
         self,
@@ -703,20 +513,301 @@ class BeanExporter:
             raise ValueError(f"missing required {field}{_row_context(row)}")
         return account
 
+
+@dataclass(frozen=True)
+class TransactionPostings:
+    exporter: BeanExporter
+    row: ReviewRow
+    amount: Decimal
+    currency: str
+
+    def build(self) -> list[Posting]:
+        raise NotImplementedError
+
+    def required_account(self, field: str) -> str:
+        return self.exporter.required_account(self.row, field)
+
+    def reject_present_fields(self, fields: tuple[str, ...], context: str) -> None:
+        present = [field for field in fields if (self.row.get(field) or "").strip()]
+        if not present:
+            return
+        raise ValueError(
+            f"{', '.join(present)} {'is' if len(present) == 1 else 'are'} "
+            f"not supported on {context}{_row_context(self.row)}"
+        )
+
+
+@dataclass(frozen=True)
+class OutflowPostings(TransactionPostings):
+    cashbacks: list[ReviewRow]
+    target_account_field: str
+    allow_share: bool
+    rejected_fields: tuple[str, ...]
+    reject_context: str
+
+    def build(self) -> list[Posting]:
+        self.reject_present_fields(self.rejected_fields, self.reject_context)
+        postings: list[Posting] = []
+        source_amount = self.amount
+        discount_amount = parse_deduction_discount_amount(
+            self.row.get("discount_amount", ""),
+            self.row.get("uid", ""),
+        )
+        gross_amount = (
+            self.amount + discount_amount
+            if self.amount >= 0
+            else self.amount - discount_amount
+        )
+        aa_amount = self.aa_amount()
+        share_amount = self.share_amount(aa_amount)
+        self.reject_priced_split(aa_amount, share_amount)
+        target_amount = gross_amount - aa_amount - share_amount
+        if aa_amount or share_amount:
+            if target_amount:
+                postings.append(
+                    Posting.plain(
+                        self.row,
+                        self.required_account(self.target_account_field),
+                        target_amount,
+                        self.currency,
+                    )
+                )
+            if aa_amount:
+                postings.append(
+                    Posting.plain(
+                        self.row,
+                        self.required_account("aa_account"),
+                        aa_amount,
+                        self.currency,
+                    )
+                )
+            if share_amount:
+                postings.append(
+                    Posting.plain(
+                        self.row,
+                        self.required_account("share_account"),
+                        share_amount,
+                        self.currency,
+                    )
+                )
+        else:
+            postings.append(
+                Posting.from_expense_amount_fields(
+                    self.row,
+                    self.required_account(self.target_account_field),
+                    gross_amount,
+                    self.currency,
+                )
+            )
+        if discount_amount:
+            postings.append(
+                Posting.plain(
+                    self.row,
+                    self.required_account("discount_account"),
+                    -discount_amount,
+                    self.currency,
+                )
+            )
+        source_amount = self.apply_cashbacks(postings, source_amount)
+        postings.append(
+            Posting.plain(
+                self.row,
+                self.required_account("source_account"),
+                -source_amount,
+                self.currency,
+            )
+        )
+        return postings
+
+    def aa_amount(self) -> Decimal:
+        return _nonnegative_decimal_field(self.row, "aa_amount", "0")
+
+    def reject_priced_split(self, aa_amount: Decimal, share_amount: Decimal) -> None:
+        if not self.row.get("original_amount") and not self.row.get("original_currency"):
+            return
+        if aa_amount:
+            raise ValueError(
+                "aa_amount is not supported with original_amount/original_currency"
+                f"{_row_context(self.row)}"
+            )
+        if share_amount:
+            raise ValueError(
+                f"share is not supported with original_amount/original_currency{_row_context(self.row)}"
+            )
+
+    def share_amount(self, aa_amount: Decimal) -> Decimal:
+        if not self.allow_share:
+            return Decimal("0")
+
+        share = (self.row.get("share") or "").strip().lower()
+        share_amount = (self.row.get("share_amount") or "").strip()
+        if share_amount and share != "custom":
+            raise ValueError(
+                f"share_amount is only allowed with share='custom'{_row_context(self.row)}"
+            )
+        if not share:
+            return Decimal("0")
+        if share == "split":
+            return ((self.amount - aa_amount) / Decimal("2")).quantize(Decimal("0.01"))
+        if share == "whole":
+            return self.amount - aa_amount
+        if share == "custom":
+            if not share_amount:
+                raise ValueError(f"share='custom' requires share_amount{_row_context(self.row)}")
+            return _nonnegative_decimal_field(self.row, "share_amount")
+        raise ValueError(f"unsupported share value {share!r}{_row_context(self.row)}")
+
     def apply_cashbacks(
         self,
-        row: ReviewRow,
-        cashbacks: list[ReviewRow],
         postings: list[Posting],
         source_amount: Decimal,
-        currency: str,
     ) -> Decimal:
-        for cashback in cashbacks:
+        for cashback in self.cashbacks:
             cb_amount = _decimal_field(cashback, "amount")
             source_amount -= cb_amount
-            income_account = self.required_account(cashback, "income_account")
-            postings.append(Posting.plain(row, income_account, -cb_amount, currency))
+            income_account = self.exporter.required_account(cashback, "income_account")
+            postings.append(Posting.plain(self.row, income_account, -cb_amount, self.currency))
         return source_amount
+
+
+@dataclass(frozen=True)
+class IncomePostings(TransactionPostings):
+    def build(self) -> list[Posting]:
+        self.reject_present_fields(
+            ("aa_amount", "share", "share_amount", "discount_amount", "commission_amount"),
+            "income rows",
+        )
+        self.reject_priced_income_row()
+        return [
+            Posting.plain(
+                self.row,
+                self.required_account("source_account"),
+                self.amount,
+                self.currency,
+            ),
+            Posting.plain(
+                self.row,
+                self.required_account("income_account"),
+                -self.amount,
+                self.currency,
+            ),
+        ]
+
+    def reject_priced_income_row(self) -> None:
+        if not self.row.get("original_amount") and not self.row.get("original_currency"):
+            return
+        if self.row.get("original_amount") and self.row.get("original_currency"):
+            raise ValueError(
+                "income row with original_amount/original_currency is ambiguous"
+                f"{_row_context(self.row)}; convert it to action=transfer,direction=transfer "
+                "and set source_account and expense_account, or use "
+                "action=transfer,direction=income with income_account as the transfer source"
+            )
+        raise ValueError(
+            f"original_amount and original_currency must be set together{_row_context(self.row)}"
+        )
+
+
+@dataclass(frozen=True)
+class TransferPostings(TransactionPostings):
+    def build(self) -> list[Posting]:
+        self.reject_present_fields(("aa_amount", "share", "share_amount"), "transfer rows")
+        target_field, source_field = self.account_fields()
+        postings: list[Posting] = []
+        discount_amount = parse_deduction_discount_amount(
+            self.row.get("discount_amount", ""),
+            self.row.get("uid", ""),
+        )
+        commission_amount = _nonnegative_decimal_field(self.row, "commission_amount", "0")
+        original_price = _transfer_original_price(self.row, self.currency)
+        if original_price:
+            self.reject_original_adjustments(discount_amount, commission_amount)
+            original_amount, original_currency = original_price
+            postings.append(
+                Posting.with_total_price(
+                    self.row,
+                    self.required_account(target_field),
+                    self.amount,
+                    self.currency,
+                    original_amount,
+                    original_currency,
+                )
+            )
+            postings.append(
+                Posting.plain(
+                    self.row,
+                    self.required_account(source_field),
+                    -original_amount,
+                    original_currency,
+                )
+            )
+            return postings
+
+        if self.row.direction == "income":
+            target_amount = self.amount
+            source_amount = self.amount - discount_amount + commission_amount
+        else:
+            target_amount = self.amount + discount_amount - commission_amount
+            source_amount = self.amount
+        postings.append(
+            Posting.plain(
+                self.row,
+                self.required_account(target_field),
+                target_amount,
+                self.currency,
+            )
+        )
+        if discount_amount:
+            postings.append(
+                Posting.plain(
+                    self.row,
+                    self.required_account("discount_account"),
+                    -discount_amount,
+                    self.currency,
+                )
+            )
+        if commission_amount:
+            postings.append(
+                Posting.plain(
+                    self.row,
+                    self.required_account("commission_account"),
+                    commission_amount,
+                    self.currency,
+                )
+            )
+        postings.append(
+            Posting.plain(
+                self.row,
+                self.required_account(source_field),
+                -source_amount,
+                self.currency,
+            )
+        )
+        return postings
+
+    def account_fields(self) -> tuple[str, str]:
+        if self.row.direction == "income":
+            return "source_account", "income_account"
+        return "expense_account", "source_account"
+
+    def reject_original_adjustments(
+        self,
+        discount_amount: Decimal,
+        commission_amount: Decimal,
+    ) -> None:
+        unsupported_fields = []
+        if discount_amount:
+            unsupported_fields.append("discount_amount")
+        if commission_amount:
+            unsupported_fields.append("commission_amount")
+        if not unsupported_fields:
+            return
+        fields = " and ".join(unsupported_fields)
+        verb = "is" if len(unsupported_fields) == 1 else "are"
+        raise ValueError(
+            f"{fields} {verb} not supported on transfer rows with "
+            f"original_amount/original_currency{_row_context(self.row)}"
+        )
 
 
 def _quote(value: str) -> str:
@@ -743,33 +834,6 @@ def _prefixed_token(value: str, prefix: str) -> str:
     return prefix + value
 
 
-def _share_receivable_amount(row: ReviewRow, share_base: Decimal) -> Decimal:
-    share = (row.get("share") or "").strip().lower()
-    share_amount = (row.get("share_amount") or "").strip()
-    if share_amount and share != "custom":
-        raise ValueError(f"share_amount is only allowed with share='custom'{_row_context(row)}")
-    if not share:
-        return Decimal("0")
-    if share == "split":
-        return (share_base / Decimal("2")).quantize(Decimal("0.01"))
-    if share == "whole":
-        return share_base
-    if share == "custom":
-        if not share_amount:
-            raise ValueError(f"share='custom' requires share_amount{_row_context(row)}")
-        return _nonnegative_decimal_field(row, "share_amount")
-    raise ValueError(f"unsupported share value {share!r}{_row_context(row)}")
-
-
-def _reject_priced_split(row: ReviewRow, aa_amount: Decimal, share_amount: Decimal) -> None:
-    if not row.get("original_amount") and not row.get("original_currency"):
-        return
-    if aa_amount:
-        raise ValueError(f"aa_amount is not supported with original_amount/original_currency{_row_context(row)}")
-    if share_amount:
-        raise ValueError(f"share is not supported with original_amount/original_currency{_row_context(row)}")
-
-
 def _transfer_original_price(row: ReviewRow, currency: str) -> tuple[Decimal, str] | None:
     original_amount = row.get("original_amount")
     original_currency = row.get("original_currency")
@@ -784,53 +848,6 @@ def _transfer_original_price(row: ReviewRow, currency: str) -> tuple[Decimal, st
     if original_currency:
         raise ValueError(f"original_amount and original_currency must be set together{_row_context(row)}")
     return None
-
-
-def _reject_original_transfer_adjustments(
-    row: ReviewRow,
-    discount_amount: Decimal,
-    commission_amount: Decimal,
-) -> None:
-    unsupported_fields = []
-    if discount_amount:
-        unsupported_fields.append("discount_amount")
-    if commission_amount:
-        unsupported_fields.append("commission_amount")
-    if not unsupported_fields:
-        return
-    fields = " and ".join(unsupported_fields)
-    verb = "is" if len(unsupported_fields) == 1 else "are"
-    raise ValueError(
-        f"{fields} {verb} not supported on transfer rows with "
-        f"original_amount/original_currency{_row_context(row)}"
-    )
-
-
-def _reject_priced_income_row(row: ReviewRow) -> None:
-    if not row.get("original_amount") and not row.get("original_currency"):
-        return
-    if row.get("original_amount") and row.get("original_currency"):
-        raise ValueError(
-            "income row with original_amount/original_currency is ambiguous"
-            f"{_row_context(row)}; convert it to action=transfer,direction=transfer and set "
-            "source_account and expense_account, or use action=transfer,direction=income with "
-            "income_account as the transfer source"
-        )
-    raise ValueError(f"original_amount and original_currency must be set together{_row_context(row)}")
-
-
-def _reject_present_fields(
-    row: ReviewRow,
-    fields: tuple[str, ...],
-    context: str,
-) -> None:
-    present = [field for field in fields if (row.get(field) or "").strip()]
-    if not present:
-        return
-    raise ValueError(
-        f"{', '.join(present)} {'is' if len(present) == 1 else 'are'} "
-        f"not supported on {context}{_row_context(row)}"
-    )
 
 
 def _decimal_field(row: ReviewRow, field: str, default: str | None = None) -> Decimal:
