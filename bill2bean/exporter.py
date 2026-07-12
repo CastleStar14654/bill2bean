@@ -20,6 +20,70 @@ class Posting:
     total_price_currency: str = ""
     flag: str = ""
 
+    @classmethod
+    def plain(
+        cls,
+        row: ReviewRow,
+        account: str,
+        amount: Decimal,
+        currency: str,
+    ) -> "Posting":
+        return cls(account, amount, currency, flag=cls.flag_for(row, account))
+
+    @classmethod
+    def from_expense_amount_fields(
+        cls,
+        row: ReviewRow,
+        account: str,
+        amount: Decimal,
+        currency: str,
+    ) -> "Posting":
+        original_amount = row.get("original_amount")
+        original_currency = row.get("original_currency")
+        if bool(original_amount) != bool(original_currency):
+            raise ValueError(
+                f"original_amount and original_currency must be set together{_row_context(row)}"
+            )
+        if original_amount and original_currency and original_currency != currency:
+            original_posting_amount = _decimal_field(row, "original_amount")
+            if amount < 0 < original_posting_amount:
+                original_posting_amount = -original_posting_amount
+                amount = -amount
+            return cls.with_total_price(
+                row,
+                account,
+                original_posting_amount,
+                original_currency,
+                amount,
+                currency,
+            )
+        return cls.plain(row, account, amount, currency)
+
+    @classmethod
+    def with_total_price(
+        cls,
+        row: ReviewRow,
+        account: str,
+        amount: Decimal,
+        currency: str,
+        total_price_amount: Decimal,
+        total_price_currency: str,
+    ) -> "Posting":
+        return cls(
+            account,
+            amount,
+            currency,
+            total_price_amount,
+            total_price_currency,
+            cls.flag_for(row, account),
+        )
+
+    @staticmethod
+    def flag_for(row: ReviewRow, account: str) -> str:
+        if row.review_level == "manual" and account in row.reasons.flagged_accounts():
+            return "!"
+        return ""
+
 
 @dataclass(frozen=True)
 class TransactionDraft:
@@ -29,6 +93,47 @@ class TransactionDraft:
     metadata: list[tuple[str, str]]
     postings: list[Posting]
     tags_links: str = ""
+
+    def format(self) -> str:
+        payee = _quote(self.payee)
+        narration = _quote(self.narration)
+        suffix = f" {self.tags_links}" if self.tags_links else ""
+        lines = [f"{self.date} * {payee} {narration}{suffix}"]
+        for key, value in self.metadata:
+            lines.append(f"  {key}: {_quote(value)}")
+        implicit_index = self.implicit_posting_index()
+        for index, posting in enumerate(self.postings):
+            flag = f"{posting.flag} " if posting.flag else ""
+            line = f"  {flag}{posting.account}"
+            if index != implicit_index:
+                line += f"  {posting.amount:.2f} {posting.currency}"
+            if posting.total_price_amount is not None and posting.total_price_currency:
+                line += f" @@ {posting.total_price_amount:.2f} {posting.total_price_currency}"
+            lines.append(line)
+        return "\n".join(lines) + "\n"
+
+    def implicit_posting_index(self) -> int | None:
+        if len(self.postings) != 2:
+            return None
+        if any(posting.total_price_amount is not None for posting in self.postings):
+            return None
+        if self.postings[0].currency != self.postings[1].currency:
+            return None
+
+        left, right = self.postings
+        left_kind = account_kind(left.account)
+        right_kind = account_kind(right.account)
+        if left_kind == "expenses" and right_kind in {"assets", "liabilities"}:
+            return 1
+        if right_kind == "expenses" and left_kind in {"assets", "liabilities"}:
+            return 0
+        if left_kind in {"assets", "liabilities"} and right_kind == "income":
+            return 1
+        if right_kind in {"assets", "liabilities"} and left_kind == "income":
+            return 0
+        if left_kind in {"assets", "liabilities"} and right_kind in {"assets", "liabilities"}:
+            return 1
+        return None
 
 
 @dataclass(frozen=True)
@@ -258,7 +363,7 @@ class BeanExporter:
             )
             if not draft:
                 continue
-            chunk = _format_transaction(draft)
+            chunk = draft.format()
             if chunk:
                 chunks.append(chunk)
         parts = _format_header(
@@ -417,7 +522,7 @@ class BeanExporter:
         if aa_amount or share_amount:
             if target_amount:
                 postings.append(
-                    _posting(
+                    Posting.plain(
                         row,
                         self.required_account(row, target_account_field),
                         target_amount,
@@ -426,7 +531,7 @@ class BeanExporter:
                 )
             if aa_amount:
                 postings.append(
-                    _posting(
+                    Posting.plain(
                         row,
                         self.required_account(row, "aa_account"),
                         aa_amount,
@@ -435,7 +540,7 @@ class BeanExporter:
                 )
             if share_amount:
                 postings.append(
-                    _posting(
+                    Posting.plain(
                         row,
                         self.required_account(row, "share_account"),
                         share_amount,
@@ -444,7 +549,7 @@ class BeanExporter:
                 )
         else:
             postings.append(
-                _priced_posting(
+                Posting.from_expense_amount_fields(
                     row,
                     self.required_account(row, target_account_field),
                     gross_amount,
@@ -453,7 +558,7 @@ class BeanExporter:
             )
         if discount_amount:
             postings.append(
-                _posting(
+                Posting.plain(
                     row,
                     self.required_account(row, "discount_account"),
                     -discount_amount,
@@ -462,7 +567,7 @@ class BeanExporter:
             )
         source_amount = self.apply_cashbacks(row, cashbacks, postings, source_amount, currency)
         postings.append(
-            _posting(
+            Posting.plain(
                 row,
                 self.required_account(row, "source_account"),
                 -source_amount,
@@ -484,8 +589,8 @@ class BeanExporter:
         )
         _reject_priced_income_row(row)
         return [
-            _posting(row, self.required_account(row, "source_account"), amount, currency),
-            _posting(row, self.required_account(row, "income_account"), -amount, currency),
+            Posting.plain(row, self.required_account(row, "source_account"), amount, currency),
+            Posting.plain(row, self.required_account(row, "income_account"), -amount, currency),
         ]
 
     def build_transfer_postings(
@@ -507,7 +612,7 @@ class BeanExporter:
             _reject_original_transfer_adjustments(row, discount_amount, commission_amount)
             original_amount, original_currency = original_price
             postings.append(
-                _priced_transfer_target_posting(
+                Posting.with_total_price(
                     row,
                     self.required_account(row, target_field),
                     amount,
@@ -517,7 +622,7 @@ class BeanExporter:
                 )
             )
             postings.append(
-                _posting(
+                Posting.plain(
                     row,
                     self.required_account(row, source_field),
                     -original_amount,
@@ -533,7 +638,7 @@ class BeanExporter:
             target_amount = amount + discount_amount - commission_amount
             source_amount = amount
         postings.append(
-            _posting(
+            Posting.plain(
                 row,
                 self.required_account(row, target_field),
                 target_amount,
@@ -542,7 +647,7 @@ class BeanExporter:
         )
         if discount_amount:
             postings.append(
-                _posting(
+                Posting.plain(
                     row,
                     self.required_account(row, "discount_account"),
                     -discount_amount,
@@ -551,7 +656,7 @@ class BeanExporter:
             )
         if commission_amount:
             postings.append(
-                _posting(
+                Posting.plain(
                     row,
                     self.required_account(row, "commission_account"),
                     commission_amount,
@@ -559,7 +664,7 @@ class BeanExporter:
                 )
             )
         postings.append(
-            _posting(
+            Posting.plain(
                 row,
                 self.required_account(row, source_field),
                 -source_amount,
@@ -610,51 +715,8 @@ class BeanExporter:
             cb_amount = _decimal_field(cashback, "amount")
             source_amount -= cb_amount
             income_account = self.required_account(cashback, "income_account")
-            postings.append(_posting(row, income_account, -cb_amount, currency))
+            postings.append(Posting.plain(row, income_account, -cb_amount, currency))
         return source_amount
-
-
-def _format_transaction(draft: TransactionDraft) -> str:
-    payee = _quote(draft.payee)
-    narration = _quote(draft.narration)
-    suffix = f" {draft.tags_links}" if draft.tags_links else ""
-    lines = [f"{draft.date} * {payee} {narration}{suffix}"]
-    for key, value in draft.metadata:
-        lines.append(f"  {key}: {_quote(value)}")
-    implicit_index = _implicit_posting_index(draft.postings)
-    for index, posting in enumerate(draft.postings):
-        flag = f"{posting.flag} " if posting.flag else ""
-        line = f"  {flag}{posting.account}"
-        if index != implicit_index:
-            line += f"  {posting.amount:.2f} {posting.currency}"
-        if posting.total_price_amount is not None and posting.total_price_currency:
-            line += f" @@ {posting.total_price_amount:.2f} {posting.total_price_currency}"
-        lines.append(line)
-    return "\n".join(lines) + "\n"
-
-
-def _implicit_posting_index(postings: list[Posting]) -> int | None:
-    if len(postings) != 2:
-        return None
-    if any(posting.total_price_amount is not None for posting in postings):
-        return None
-    if postings[0].currency != postings[1].currency:
-        return None
-
-    left, right = postings
-    left_kind = account_kind(left.account)
-    right_kind = account_kind(right.account)
-    if left_kind == "expenses" and right_kind in {"assets", "liabilities"}:
-        return 1
-    if right_kind == "expenses" and left_kind in {"assets", "liabilities"}:
-        return 0
-    if left_kind in {"assets", "liabilities"} and right_kind == "income":
-        return 1
-    if right_kind in {"assets", "liabilities"} and left_kind == "income":
-        return 0
-    if left_kind in {"assets", "liabilities"} and right_kind in {"assets", "liabilities"}:
-        return 1
-    return None
 
 
 def _quote(value: str) -> str:
@@ -699,32 +761,6 @@ def _share_receivable_amount(row: ReviewRow, share_base: Decimal) -> Decimal:
     raise ValueError(f"unsupported share value {share!r}{_row_context(row)}")
 
 
-def _priced_posting(
-    row: ReviewRow,
-    account: str,
-    amount: Decimal,
-    currency: str,
-) -> Posting:
-    original_amount = row.get("original_amount")
-    original_currency = row.get("original_currency")
-    if bool(original_amount) != bool(original_currency):
-        raise ValueError(f"original_amount and original_currency must be set together{_row_context(row)}")
-    if original_amount and original_currency and original_currency != currency:
-        original_posting_amount = _decimal_field(row, "original_amount")
-        if amount < 0 < original_posting_amount:
-            original_posting_amount = -original_posting_amount
-            amount = -amount
-        return Posting(
-            account,
-            original_posting_amount,
-            original_currency,
-            amount,
-            currency,
-            _posting_flag(row, account),
-        )
-    return _posting(row, account, amount, currency)
-
-
 def _reject_priced_split(row: ReviewRow, aa_amount: Decimal, share_amount: Decimal) -> None:
     if not row.get("original_amount") and not row.get("original_currency"):
         return
@@ -732,24 +768,6 @@ def _reject_priced_split(row: ReviewRow, aa_amount: Decimal, share_amount: Decim
         raise ValueError(f"aa_amount is not supported with original_amount/original_currency{_row_context(row)}")
     if share_amount:
         raise ValueError(f"share is not supported with original_amount/original_currency{_row_context(row)}")
-
-
-def _priced_transfer_target_posting(
-    row: ReviewRow,
-    account: str,
-    amount: Decimal,
-    currency: str,
-    original_amount: Decimal,
-    original_currency: str,
-) -> Posting:
-    return Posting(
-        account,
-        amount,
-        currency,
-        original_amount,
-        original_currency,
-        _posting_flag(row, account),
-    )
 
 
 def _transfer_original_price(row: ReviewRow, currency: str) -> tuple[Decimal, str] | None:
@@ -813,21 +831,6 @@ def _reject_present_fields(
         f"{', '.join(present)} {'is' if len(present) == 1 else 'are'} "
         f"not supported on {context}{_row_context(row)}"
     )
-
-
-def _posting(
-    row: ReviewRow,
-    account: str,
-    amount: Decimal,
-    currency: str,
-) -> Posting:
-    return Posting(account, amount, currency, flag=_posting_flag(row, account))
-
-
-def _posting_flag(row: ReviewRow, account: str) -> str:
-    if row.review_level == "manual" and account in row.reasons.flagged_accounts():
-        return "!"
-    return ""
 
 
 def _decimal_field(row: ReviewRow, field: str, default: str | None = None) -> Decimal:
