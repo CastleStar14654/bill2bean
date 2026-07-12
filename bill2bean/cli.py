@@ -5,7 +5,7 @@ import getpass
 import sys
 
 from .config import Config
-from .exporter import ExportDefaults, filter_review_rows, render_beancount, required_accounts_for_export
+from .exporter import BeanExporter, ExportDefaults
 from .investments import (
     extract_price_directives,
     merge_price_directives,
@@ -131,27 +131,22 @@ def main(argv: list[str] | None = None) -> int:
         args.price_output = args.output
     config = Config.load(args.config)
     export_defaults = ExportDefaults.from_config(config)
+    exporter = BeanExporter(
+        export_defaults,
+        rows=rows,
+        include_sources=include_sources,
+        exclude_sources=exclude_sources,
+        start_date=args.start_date,
+        end_date=args.end_date,
+    )
     try:
-        filtered_rows = filter_review_rows(
-            rows,
-            include_sources=include_sources,
-            exclude_sources=exclude_sources,
-            start_date=args.start_date,
-            end_date=args.end_date,
-        )
+        filtered_rows = exporter.filtered_rows
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
     try:
         if args.accounts:
-            required_accounts = required_accounts_for_export(
-                rows,
-                include_sources=include_sources,
-                exclude_sources=exclude_sources,
-                start_date=args.start_date,
-                end_date=args.end_date,
-                defaults=export_defaults,
-            )
+            required_accounts = exporter.required_accounts()
             if fund_enabled:
                 required_accounts |= required_accounts_for_fund_export(
                     filtered_rows,
@@ -164,17 +159,11 @@ def main(argv: list[str] | None = None) -> int:
                 for account in missing:
                     print(f"  {account}", file=sys.stderr)
                 return 2
-        normal_text = render_beancount(
-            rows,
+        normal_text = exporter.render(
             include_accounts=args.accounts if args.with_header else "",
             include_files=[args.fund_commodities] if fund_enabled and args.with_header else [],
             operating_currency=args.operating_currency if args.with_header else "",
             investment_header_options=fund_enabled and args.with_header,
-            include_sources=include_sources,
-            exclude_sources=exclude_sources,
-            start_date=args.start_date,
-            end_date=args.end_date,
-            defaults=export_defaults,
         )
         outputs: dict[str, list[str]] = {args.output: [normal_text]}
         if fund_enabled:

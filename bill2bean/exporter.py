@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, InvalidOperation
+from functools import cached_property
 from pathlib import Path
 import re
 
@@ -172,70 +173,20 @@ def export_beancount(
     defaults: ExportDefaults | None = None,
 ) -> None:
     all_rows = read_review_csv(review_csv)
-    text = render_beancount(
-        all_rows,
-        include_accounts=include_accounts,
-        include_files=include_files,
-        operating_currency=operating_currency,
-        investment_header_options=investment_header_options,
+    text = BeanExporter(
+        defaults or ExportDefaults(),
+        rows=all_rows,
         include_sources=include_sources,
         exclude_sources=exclude_sources,
         start_date=start_date,
         end_date=end_date,
-        defaults=defaults,
+    ).render(
+        include_accounts=include_accounts,
+        include_files=include_files,
+        operating_currency=operating_currency,
+        investment_header_options=investment_header_options,
     )
     Path(output).write_text(text, encoding="utf-8")
-
-
-def render_beancount(
-    rows: list[ReviewRow],
-    include_accounts: str = "",
-    include_files: list[str] | None = None,
-    operating_currency: str = "",
-    investment_header_options: bool = False,
-    include_sources: set[str] | None = None,
-    exclude_sources: set[str] | None = None,
-    start_date: str = "",
-    end_date: str = "",
-    defaults: ExportDefaults | None = None,
-) -> str:
-    return BeanExporter(defaults or ExportDefaults()).render(
-        rows,
-        include_accounts=include_accounts,
-        include_files=include_files,
-        operating_currency=operating_currency,
-        investment_header_options=investment_header_options,
-        include_sources=include_sources,
-        exclude_sources=exclude_sources,
-        start_date=start_date,
-        end_date=end_date,
-    )
-
-
-def filter_review_rows(
-    rows: list[ReviewRow],
-    include_sources: set[str] | None = None,
-    exclude_sources: set[str] | None = None,
-    start_date: str = "",
-    end_date: str = "",
-) -> list[ReviewRow]:
-    _validate_date_range(start_date, end_date)
-    include_sources = include_sources or set()
-    exclude_sources = exclude_sources or set()
-    filtered: list[ReviewRow] = []
-    for row in rows:
-        source = row.source
-        if include_sources and source not in include_sources:
-            continue
-        if exclude_sources and source in exclude_sources:
-            continue
-        row_date = row.posting_date
-        if start_date and row_date < start_date:
-            continue
-        if end_date and row_date > end_date:
-            continue
-        filtered.append(row)
-    return filtered
 
 
 def _validate_date_range(start_date: str, end_date: str) -> None:
@@ -288,23 +239,6 @@ def _redirect_parent_uid(parent_uid: str, redirects: dict[str, str]) -> str:
     return parent_uid
 
 
-def required_accounts_for_export(
-    rows: list[ReviewRow],
-    include_sources: set[str] | None = None,
-    exclude_sources: set[str] | None = None,
-    start_date: str = "",
-    end_date: str = "",
-    defaults: ExportDefaults | None = None,
-) -> set[str]:
-    return BeanExporter(defaults or ExportDefaults()).required_accounts(
-        rows,
-        include_sources=include_sources,
-        exclude_sources=exclude_sources,
-        start_date=start_date,
-        end_date=end_date,
-    )
-
-
 def _format_header(
     include_accounts: str,
     include_files: list[str],
@@ -330,36 +264,52 @@ def _format_header(
         lines.append("")
     return lines
 
+
 @dataclass(frozen=True)
 class BeanExporter:
     defaults: ExportDefaults = field(default_factory=ExportDefaults)
+    rows: list[ReviewRow] = field(default_factory=list)
+    include_sources: set[str] | None = None
+    exclude_sources: set[str] | None = None
+    start_date: str = ""
+    end_date: str = ""
+
+    @cached_property
+    def filtered_rows(self) -> list[ReviewRow]:
+        _validate_date_range(self.start_date, self.end_date)
+        include_sources = self.include_sources or set()
+        exclude_sources = self.exclude_sources or set()
+        filtered: list[ReviewRow] = []
+        for row in self.rows:
+            source = row.source
+            if include_sources and source not in include_sources:
+                continue
+            if exclude_sources and source in exclude_sources:
+                continue
+            row_date = row.posting_date
+            if self.start_date and row_date < self.start_date:
+                continue
+            if self.end_date and row_date > self.end_date:
+                continue
+            filtered.append(row)
+        return filtered
+
+    @cached_property
+    def cashback_by_parent(self) -> dict[str, list[ReviewRow]]:
+        return cashback_mapping(self.rows)
 
     def render(
         self,
-        rows: list[ReviewRow],
         include_accounts: str = "",
         include_files: list[str] | None = None,
         operating_currency: str = "",
         investment_header_options: bool = False,
-        include_sources: set[str] | None = None,
-        exclude_sources: set[str] | None = None,
-        start_date: str = "",
-        end_date: str = "",
     ) -> str:
-        cashback_by_parent = cashback_mapping(rows)
-        filtered = filter_review_rows(
-            rows,
-            include_sources=include_sources,
-            exclude_sources=exclude_sources,
-            start_date=start_date,
-            end_date=end_date,
-        )
-
         chunks: list[str] = []
-        for row in filtered:
+        for row in self.filtered_rows:
             draft = self.build_transaction_draft(
                 row,
-                cashback_by_parent.get(row["uid"], []),
+                self.cashback_by_parent.get(row["uid"], []),
             )
             if not draft:
                 continue
@@ -375,27 +325,12 @@ class BeanExporter:
         parts.extend(chunks)
         return "\n".join(parts).rstrip() + "\n"
 
-    def required_accounts(
-        self,
-        rows: list[ReviewRow],
-        include_sources: set[str] | None = None,
-        exclude_sources: set[str] | None = None,
-        start_date: str = "",
-        end_date: str = "",
-    ) -> set[str]:
-        cashback_by_parent = cashback_mapping(rows)
-        filtered = filter_review_rows(
-            rows,
-            include_sources=include_sources,
-            exclude_sources=exclude_sources,
-            start_date=start_date,
-            end_date=end_date,
-        )
+    def required_accounts(self) -> set[str]:
         accounts: set[str] = set()
-        for row in filtered:
+        for row in self.filtered_rows:
             draft = self.build_transaction_draft(
                 row,
-                cashback_by_parent.get(row["uid"], []),
+                self.cashback_by_parent.get(row["uid"], []),
             )
             if not draft:
                 continue
