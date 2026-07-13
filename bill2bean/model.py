@@ -161,7 +161,7 @@ class BillTransaction:
         return " ".join([self.payee, self.narration, str(self.metadata)])
 
     def is_family_card(self) -> bool:
-        return self.source == "wechat" and self.metadata.get("交易类型") == "亲属卡交易"
+        return self.metadata.get("family_card") == "true"
 
     def is_payment_platform_credit_card_repayment(self) -> bool:
         return self.source in {"alipay", "wechat"} and "信用卡还款" in self.text()

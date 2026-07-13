@@ -80,6 +80,8 @@ class AlipayCsvParser(BillParser):
             metadata["discount_amount_unknown"] = "true"
         if self._is_cancelled(row):
             metadata["cancelled_transaction"] = "true"
+        if self._is_family_card(row):
+            metadata["family_card"] = "true"
         source_account = self._apply_account_metadata(
             row,
             payee,
@@ -185,6 +187,13 @@ class AlipayCsvParser(BillParser):
             ]
         )
         return "花呗" in text
+
+    @classmethod
+    def _is_family_card(cls, row: dict[str, str]) -> bool:
+        return (
+            (row.get("交易分类") or "").strip() == "亲友代付"
+            and (row.get("商品说明") or "").strip() == "亲情卡"
+        )
 
     @classmethod
     def _is_investment_buy_refund(cls, row: dict[str, str]) -> bool:
@@ -316,6 +325,8 @@ class WechatXlsxParser(BillParser):
         status = (row.get("当前状态") or "").strip()
         source_account = self.config.wechat_account_for_method(payment_method, status)
         metadata = dict(row)
+        if self._is_family_card(row):
+            metadata["family_card"] = "true"
         narration = (row.get("商品") or "").strip()
         if self._is_platform_transfer(row):
             source_account, target_account, transfer_kind = self._wechat_transfer_accounts(row)
@@ -439,6 +450,10 @@ class WechatXlsxParser(BillParser):
     @classmethod
     def _is_pending(cls, row: dict[str, str]) -> bool:
         return (row.get("当前状态") or "").strip() == "转出中，等待资金到账"
+
+    @classmethod
+    def _is_family_card(cls, row: dict[str, str]) -> bool:
+        return (row.get("交易类型") or "").strip() == "亲属卡交易"
 
 
 class _TableParser(HTMLParser):

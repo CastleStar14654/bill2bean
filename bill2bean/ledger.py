@@ -509,7 +509,7 @@ class CrossSourceMatcher:
 
     def _enrich_family_card(self, family_tx: BillTransaction, credit_tx: BillTransaction) -> None:
         original = family_tx.narration.strip()
-        if not original or original == "/":
+        if not original or original in {"/", "亲情卡", "亲属卡", "亲属卡交易"}:
             family_tx.narration = credit_tx.payee
         family_tx.metadata["matched_credit_payee"] = credit_tx.payee
         family_tx.metadata["matched_credit_type"] = credit_tx.narration
