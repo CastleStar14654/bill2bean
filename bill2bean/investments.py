@@ -11,7 +11,7 @@ import sys
 
 from tqdm import tqdm
 
-from .beancount_format import format_decimal, quote
+from .beancount_format import format_decimal, format_tags_links, quote
 from .config import FundConfig
 from .discounts import DiscountAmount
 from .ledger import ReviewRow
@@ -225,9 +225,11 @@ class InvestmentTransactionDraft:
     narration: str
     metadata: list[tuple[str, str]]
     postings: list[InvestmentPosting]
+    tags_links: str = ""
 
     def format(self) -> str:
-        lines = [f"{self.date} * {quote(self.payee)} {quote(self.narration)}"]
+        suffix = f" {self.tags_links}" if self.tags_links else ""
+        lines = [f"{self.date} * {quote(self.payee)} {quote(self.narration)}{suffix}"]
         for key, value in self.metadata:
             lines.append(f"  {key}: {quote(value)}")
         lines.extend(posting.format() for posting in self.postings)
@@ -571,6 +573,7 @@ def _fund_trade_draft(
         narration=_fund_narration(row, trade),
         metadata=metadata,
         postings=postings,
+        tags_links=format_tags_links(row.get("tags", ""), row.get("links", "")),
     )
 
 
