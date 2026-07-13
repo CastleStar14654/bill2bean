@@ -8,19 +8,21 @@ from pathlib import Path
 import re
 
 from .accounts import account_kind
-from .beancount_format import escape_directive_value, format_tags_links, quote
+from .beancount_format import (
+    BasePosting,
+    escape_directive_value,
+    format_tags_links,
+    quote,
+)
 from .discounts import parse_deduction_discount_amount
 from .ledger import ReviewRow, read_review_csv
 
 
 @dataclass(frozen=True)
-class Posting:
-    account: str
-    amount: Decimal
-    currency: str
+class Posting(BasePosting):
     total_price_amount: Decimal | None = None
     total_price_currency: str = ""
-    flagged: bool = False
+    supports_implicit_amount = True
 
     @classmethod
     def plain(
@@ -30,7 +32,12 @@ class Posting:
         amount: Decimal,
         currency: str,
     ) -> "Posting":
-        return cls(account, amount, currency, flagged=cls.is_flagged(row, account))
+        return cls(
+            account,
+            f"{amount:.2f}",
+            currency,
+            flagged=cls.is_flagged(row, account),
+        )
 
     @classmethod
     def from_expense_amount_fields(
@@ -72,23 +79,19 @@ class Posting:
         total_price_currency: str,
     ) -> "Posting":
         return cls(
-            account,
-            amount,
-            currency,
-            total_price_amount,
-            total_price_currency,
-            cls.is_flagged(row, account),
+            account=account,
+            amount=f"{amount:.2f}",
+            currency=currency,
+            total_price_amount=total_price_amount,
+            total_price_currency=total_price_currency,
+            flagged=cls.is_flagged(row, account),
         )
 
     @staticmethod
     def is_flagged(row: ReviewRow, account: str) -> bool:
         return row.review_level == "manual" and account in row.reasons.flagged_accounts()
 
-    def format(self, implicit: bool = False) -> str:
-        flag = "! " if self.flagged else ""
-        line = f"  {flag}{self.account}"
-        if not implicit:
-            line += f"  {self.amount:.2f} {self.currency}"
+    def format_suffix(self, line: str) -> str:
         if self.total_price_amount is not None and self.total_price_currency:
             line += f" @@ {self.total_price_amount:.2f} {self.total_price_currency}"
         return line

@@ -11,7 +11,7 @@ import sys
 
 from tqdm import tqdm
 
-from .beancount_format import format_decimal, format_tags_links, quote
+from .beancount_format import BasePosting, format_decimal, format_tags_links, quote
 from .config import FundConfig
 from .discounts import DiscountAmount
 from .ledger import ReviewRow
@@ -85,6 +85,12 @@ class FundTrade:
 class Price:
     amount: Decimal
     currency: str
+
+    def format(self) -> str:
+        return f"{format_decimal(self.amount)} {self.currency}"
+
+    def __str__(self) -> str:
+        return self.format()
 
 
 @dataclass(frozen=True)
@@ -209,12 +215,8 @@ class InvestmentPriceSource:
 
 
 @dataclass(frozen=True)
-class InvestmentPosting:
-    account: str
-    amount: str = ""
-    currency: str = ""
+class InvestmentPosting(BasePosting):
     cost: str = ""
-    flagged: bool = False
 
     @classmethod
     def amount_posting(
@@ -238,7 +240,7 @@ class InvestmentPosting:
             account,
             units,
             commodity,
-            cost=f"{{{format_decimal(price.amount)} {price.currency}}}",
+            cost=f"{{{price}}}",
         )
 
     @classmethod
@@ -254,11 +256,7 @@ class InvestmentPosting:
     def balancing(cls, account: str) -> "InvestmentPosting":
         return cls(account)
 
-    def format(self) -> str:
-        flag = "! " if self.flagged else ""
-        line = f"  {flag}{self.account}"
-        if self.amount and self.currency:
-            line += f"  {self.amount} {self.currency}"
+    def format_suffix(self, line: str) -> str:
         if self.cost:
             line += f" {self.cost}"
         return line
