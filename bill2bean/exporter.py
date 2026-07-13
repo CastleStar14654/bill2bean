@@ -15,6 +15,7 @@ from .beancount_format import (
     format_tags_links,
 )
 from .discounts import parse_deduction_discount_amount
+from .export_base import BaseTransactionExporter
 from .ledger import ReviewRow, read_review_csv
 
 
@@ -270,7 +271,7 @@ class ReviewRowFilter:
 
 
 @dataclass(frozen=True)
-class BeanExporter:
+class BeanExporter(BaseTransactionExporter[ReviewRow, TransactionDraft]):
     defaults: ExportDefaults = field(default_factory=ExportDefaults)
     rows: tuple[ReviewRow, ...] = field(default_factory=tuple)
 
@@ -287,17 +288,9 @@ class BeanExporter:
                 cashbacks.setdefault(parent_uid, []).append(row)
         return cashbacks
 
-    @cached_property
-    def transaction_drafts(self) -> tuple[TransactionDraft, ...]:
-        drafts: list[TransactionDraft] = []
-        for row in self.rows:
-            draft = self.build_transaction_draft(
-                row,
-                self.cashback_by_parent.get(row["uid"], []),
-            )
-            if draft:
-                drafts.append(draft)
-        return tuple(drafts)
+    @property
+    def transaction_items(self) -> tuple[ReviewRow, ...]:
+        return self.rows
 
     def render(
         self,
@@ -306,27 +299,21 @@ class BeanExporter:
         operating_currency: str = "",
         investment_header_options: bool = False,
     ) -> str:
-        chunks = [draft.format() for draft in self.transaction_drafts]
         parts = _format_header(
             include_accounts,
             include_files or [],
             operating_currency,
             investment_header_options,
         )
-        parts.extend(chunks)
+        if transactions := self.render_transactions():
+            parts.append(transactions)
         return "\n".join(parts).rstrip() + "\n"
-
-    def required_accounts(self) -> set[str]:
-        accounts: set[str] = set()
-        for draft in self.transaction_drafts:
-            accounts.update(posting.account for posting in draft.postings if posting.account)
-        return accounts
 
     def build_transaction_draft(
         self,
         row: ReviewRow,
-        cashbacks: list[ReviewRow],
     ) -> TransactionDraft | None:
+        cashbacks = self.cashback_by_parent.get(row["uid"], [])
         action = (row.action or "post").strip()
         if action in {"skip", "merge_cashback", "invest"}:
             return None
@@ -353,7 +340,14 @@ class BeanExporter:
 
         builder = self.posting_builder_for(row, cashbacks, amount, currency)
         postings = builder.build()
-        return self.draft(row, metadata, postings)
+        return TransactionDraft(
+            date=row.posting_date,
+            payee=row["payee"],
+            narration=row["narration"],
+            metadata=metadata,
+            postings=postings,
+            tags_links=format_tags_links(row.get("tags", ""), row.get("links", "")),
+        )
 
     def posting_builder_for(
         self,
@@ -407,21 +401,6 @@ class BeanExporter:
         if direction == "transfer":
             return TransferPostings(self, row, amount, currency)
         raise ValueError(f"unsupported direction {direction!r}{row.context()}")
-
-    def draft(
-        self,
-        row: ReviewRow,
-        metadata: list[tuple[str, str]],
-        postings: list[Posting],
-    ) -> TransactionDraft:
-        return TransactionDraft(
-            date=row.posting_date,
-            payee=row["payee"],
-            narration=row["narration"],
-            metadata=metadata,
-            postings=postings,
-            tags_links=format_tags_links(row.get("tags", ""), row.get("links", "")),
-        )
 
     def account_for_required_field(
         self,

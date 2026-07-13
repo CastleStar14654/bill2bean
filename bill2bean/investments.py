@@ -19,6 +19,7 @@ from .beancount_format import (
 )
 from .config import FundConfig
 from .discounts import DiscountAmount
+from .export_base import BaseTransactionExporter
 from .ledger import ReviewRow
 
 
@@ -267,7 +268,9 @@ class InvestmentTransactionDraft(BaseTransactionDraft[InvestmentPosting]):
 
 
 @dataclass(frozen=True)
-class InvestmentExporter:
+class InvestmentExporter(
+    BaseTransactionExporter[FundTrade, InvestmentTransactionDraft]
+):
     rows: tuple[ReviewRow, ...]
     commodity_source: InvestmentCommoditySource
     price_source: InvestmentPriceSource
@@ -284,6 +287,10 @@ class InvestmentExporter:
             for trade in [FundTrade.from_row(row, self.commodity_source.items)]
             if trade is not None
         ]
+
+    @property
+    def transaction_items(self) -> list[FundTrade]:
+        return self.trades
 
     @cached_property
     def missing_dates(self) -> list[date]:
@@ -335,10 +342,6 @@ class InvestmentExporter:
             )
         )
 
-    @cached_property
-    def transaction_drafts(self) -> list[InvestmentTransactionDraft]:
-        return [self.build_transaction_draft(trade) for trade in self.trades]
-
     def build_transaction_draft(self, trade: FundTrade) -> InvestmentTransactionDraft:
         row = trade.row
         price_date = self.price_date_for(trade).isoformat()
@@ -363,12 +366,6 @@ class InvestmentExporter:
             postings=postings,
             tags_links=format_tags_links(row.get("tags", ""), row.get("links", "")),
         )
-
-    def render_transactions(self) -> str:
-        rendered = [draft.format() for draft in self.transaction_drafts]
-        if not rendered:
-            return ""
-        return "\n".join(chunk for chunk in rendered if chunk).rstrip() + "\n"
 
     def render_prices(self) -> str:
         return self.fetched_prices.rstrip() + "\n" if self.fetched_prices.strip() else ""
