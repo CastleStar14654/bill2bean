@@ -92,6 +92,10 @@ class Price:
     amount: Decimal
     currency: str
 
+    @classmethod
+    def from_text(cls, amount: str, currency: str) -> "Price":
+        return cls(Decimal(amount), currency)
+
     def format(self) -> str:
         return f"{format_decimal(self.amount)} {self.currency}"
 
@@ -192,7 +196,7 @@ class InvestmentPriceSource:
             if not match:
                 continue
             date_text, symbol, amount, currency = match.groups()
-            prices[(date_text, symbol)] = Price(Decimal(amount), currency)
+            prices[(date_text, symbol)] = Price.from_text(amount, currency)
         return prices
 
     @staticmethod
@@ -390,22 +394,6 @@ class InvestmentExporter(
                     row.discount_account or self.fund_config.discount_income_account
                 )
         return {account for account in accounts if account}
-
-
-def parse_commodities(path: str | Path) -> list[InvestmentCommodity]:
-    return InvestmentCommoditySource(path).items
-
-
-def parse_prices(text: str) -> dict[tuple[str, str], Price]:
-    return InvestmentPriceSource.parse_text(text)
-
-
-def extract_price_directives(text: str) -> str:
-    return InvestmentPriceSource.extract_directives(text)
-
-
-def merge_price_directives(*texts: str) -> str:
-    return InvestmentPriceSource.merge_directives(*texts)
 
 
 def fetch_price_directives(
