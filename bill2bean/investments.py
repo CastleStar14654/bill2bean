@@ -109,6 +109,12 @@ class InvestmentCommoditySource:
         commodity_re = re.compile(r"^\d{4}-\d{2}-\d{2}\s+commodity\s+(\S+)")
         meta_re = re.compile(r'^\s+([A-Za-z0-9_-]+):\s+"(.*)"\s*$')
 
+        def metadata_int(key: str) -> int | None:
+            value = metadata.get(key)
+            if value is None or not value.strip():
+                return None
+            return int(value.strip())
+
         def flush() -> None:
             nonlocal current_symbol, metadata
             if current_symbol and metadata.get("name"):
@@ -118,9 +124,9 @@ class InvestmentCommoditySource:
                         name=metadata.get("name", ""),
                         asset_class=metadata.get("asset-class", "fund"),
                         price_source=metadata.get("price", ""),
-                        settlement_days=_metadata_int(metadata, "settlement-days")
+                        settlement_days=metadata_int("settlement-days")
                         if "settlement-days" in metadata
-                        else _metadata_int(metadata, "settlement_days"),
+                        else metadata_int("settlement_days"),
                     )
                 )
             current_symbol = ""
@@ -544,16 +550,10 @@ class FundTradePostings:
     def buy_postings(self) -> list[InvestmentPosting]:
         postings: list[InvestmentPosting] = []
         if self.price:
-            units = _units(
-                self.row,
-                self.trade_amount,
-                self.price.amount,
-                self.fund_config.share_precision,
-            )
             postings.append(
                 InvestmentPosting.units_with_cost(
                     self.account,
-                    units,
+                    self.units(self.price),
                     self.trade.commodity.symbol,
                     self.price,
                 )
@@ -580,16 +580,10 @@ class FundTradePostings:
     def sell_postings(self) -> list[InvestmentPosting]:
         postings: list[InvestmentPosting] = []
         if self.price:
-            units = _units(
-                self.row,
-                self.trade_amount,
-                self.price.amount,
-                self.fund_config.share_precision,
-            )
             postings.append(
                 InvestmentPosting.units_empty_cost(
                     self.account,
-                    f"-{units}",
+                    f"-{self.units(self.price)}",
                     self.trade.commodity.symbol,
                 )
             )
@@ -697,24 +691,16 @@ class FundTradePostings:
             return self.amount - self.net_fee
         return self.amount + self.net_fee
 
-
-def _units(
-    row: ReviewRow,
-    amount: Decimal,
-    price: Decimal,
-    precision: int,
-) -> str:
-    if row.investment_units:
-        return row.investment_units
-    quantum = Decimal(1).scaleb(-precision)
-    return str((amount / price).quantize(quantum, rounding=ROUND_HALF_UP))
-
-
-def _metadata_int(metadata: dict[str, str], key: str) -> int | None:
-    value = metadata.get(key)
-    if value is None or not value.strip():
-        return None
-    return int(value.strip())
+    def units(self, price: Price) -> str:
+        if self.row.investment_units:
+            return self.row.investment_units
+        quantum = Decimal(1).scaleb(-self.fund_config.share_precision)
+        return str(
+            (self.trade_amount / price.amount).quantize(
+                quantum,
+                rounding=ROUND_HALF_UP,
+            )
+        )
 
 
 def business_day_on_or_after(value: date) -> date:
