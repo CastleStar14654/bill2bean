@@ -283,10 +283,30 @@ class InvestmentExporter:
 
     @cached_property
     def transaction_drafts(self) -> list[InvestmentTransactionDraft]:
-        return [
-            _fund_trade_draft(trade, self.fund_config, self.price_table)
-            for trade in self.trades
+        return [self.build_transaction_draft(trade) for trade in self.trades]
+
+    def build_transaction_draft(self, trade: FundTrade) -> InvestmentTransactionDraft:
+        row = trade.row
+        price_date = _price_date_for_trade(trade, self.fund_config).isoformat()
+        metadata = [
+            ("source", row.source),
+            ("import_id", row.uid),
+            ("price_date", price_date),
         ]
+        postings = FundTradePostings(
+            trade,
+            self.fund_config,
+            self.price_table,
+            price_date,
+        ).build()
+        return InvestmentTransactionDraft(
+            date=row.posting_date,
+            payee=row.payee,
+            narration=_fund_narration(row, trade),
+            metadata=metadata,
+            postings=postings,
+            tags_links=format_tags_links(row.get("tags", ""), row.get("links", "")),
+        )
 
     def render(self) -> InvestmentExportResult:
         rendered = [draft.format() for draft in self.transaction_drafts]
@@ -493,113 +513,179 @@ def _fund_trade_for_row(
     return None
 
 
-def _fund_trade_draft(
-    trade: FundTrade,
-    fund_config: FundConfig,
-    prices: dict[tuple[str, str], Price],
-) -> InvestmentTransactionDraft:
-    row = trade.row
-    amount = row.decimal_field("amount")
-    price_date = _price_date_for_trade(trade, fund_config).isoformat()
-    price = _price_for_trade(row, trade.commodity, price_date, prices)
-    account = fund_config.account_for_asset_class(trade.commodity.asset_class)
-    currency = row.currency or "CNY"
-    discount = DiscountAmount.parse(row.discount_amount)
-    discount_account = row.discount_account or fund_config.discount_income_account
-    commission_amount = row.nonnegative_decimal_field("commission_amount", "0")
-    commission_account = row.commission_account or fund_config.commission_account
-    net_fee = commission_amount - discount.fee_deduction
-    trade_amount = amount - net_fee if trade.side == "buy" else amount + net_fee
-    metadata = [
-        ("source", row.source),
-        ("import_id", row.uid),
-        ("price_date", price_date),
-    ]
-    postings: list[InvestmentPosting] = []
-    if trade.side == "buy":
-        if price:
-            units = _units(row, trade_amount, price.amount, fund_config.share_precision)
-            postings.append(
-                InvestmentPosting.units_with_cost(account, units, trade.commodity.symbol, price)
-            )
+@dataclass(frozen=True)
+class FundTradePostings:
+    trade: FundTrade
+    fund_config: FundConfig
+    prices: dict[tuple[str, str], Price]
+    price_date: str
+
+    def build(self) -> list[InvestmentPosting]:
+        postings: list[InvestmentPosting] = []
+        if self.trade.side == "buy":
+            postings.extend(self.buy_postings())
         else:
-            postings.append(
-                InvestmentPosting.amount_posting(account, trade_amount, currency, flagged=True)
+            postings.extend(self.sell_postings())
+        return postings
+
+    def buy_postings(self) -> list[InvestmentPosting]:
+        postings: list[InvestmentPosting] = []
+        if self.price:
+            units = _units(
+                self.row,
+                self.trade_amount,
+                self.price.amount,
+                self.fund_config.share_precision,
             )
-        postings.extend(
-            _fee_postings(
-                discount,
-                discount_account,
-                commission_amount,
-                commission_account,
-                row.source_account,
-                currency,
-            )
-        )
-        postings.append(InvestmentPosting.amount_posting(row.source_account, -amount, currency))
-    else:
-        if price:
-            units = _units(row, trade_amount, price.amount, fund_config.share_precision)
             postings.append(
-                InvestmentPosting.units_empty_cost(
-                    account,
-                    f"-{units}",
-                    trade.commodity.symbol,
+                InvestmentPosting.units_with_cost(
+                    self.account,
+                    units,
+                    self.trade.commodity.symbol,
+                    self.price,
                 )
             )
         else:
             postings.append(
-                InvestmentPosting.amount_posting(account, -trade_amount, currency, flagged=True)
+                InvestmentPosting.amount_posting(
+                    self.account,
+                    self.trade_amount,
+                    self.currency,
+                    flagged=True,
+                )
             )
-        postings.append(InvestmentPosting.amount_posting(row.source_account, amount, currency))
-        postings.extend(
-            _fee_postings(
-                discount,
-                discount_account,
-                commission_amount,
-                commission_account,
-                row.source_account,
-                currency,
+        postings.extend(self.fee_postings)
+        postings.append(
+            InvestmentPosting.amount_posting(
+                self.row.source_account,
+                -self.amount,
+                self.currency,
             )
         )
+        return postings
+
+    def sell_postings(self) -> list[InvestmentPosting]:
+        postings: list[InvestmentPosting] = []
+        if self.price:
+            units = _units(
+                self.row,
+                self.trade_amount,
+                self.price.amount,
+                self.fund_config.share_precision,
+            )
+            postings.append(
+                InvestmentPosting.units_empty_cost(
+                    self.account,
+                    f"-{units}",
+                    self.trade.commodity.symbol,
+                )
+            )
+        else:
+            postings.append(
+                InvestmentPosting.amount_posting(
+                    self.account,
+                    -self.trade_amount,
+                    self.currency,
+                    flagged=True,
+                )
+            )
+        postings.append(
+            InvestmentPosting.amount_posting(
+                self.row.source_account,
+                self.amount,
+                self.currency,
+            )
+        )
+        postings.extend(self.fee_postings)
         postings.append(
             InvestmentPosting.balancing(
-                fund_config.income_account_for_asset_class(trade.commodity.asset_class)
+                self.fund_config.income_account_for_asset_class(
+                    self.trade.commodity.asset_class
+                )
             )
         )
-    return InvestmentTransactionDraft(
-        date=row.posting_date,
-        payee=row.payee,
-        narration=_fund_narration(row, trade),
-        metadata=metadata,
-        postings=postings,
-        tags_links=format_tags_links(row.get("tags", ""), row.get("links", "")),
-    )
+        return postings
 
-
-def _fee_postings(
-    discount: DiscountAmount,
-    discount_account: str,
-    commission_amount: Decimal,
-    commission_account: str,
-    source_account: str,
-    currency: str,
-) -> list[InvestmentPosting]:
-    postings: list[InvestmentPosting] = []
-    if commission_amount:
-        postings.append(
-            InvestmentPosting.amount_posting(commission_account, commission_amount, currency)
-        )
-    discount_amount = discount.amount
-    if discount_amount:
-        if discount.is_cashback:
+    @cached_property
+    def fee_postings(self) -> tuple[InvestmentPosting, ...]:
+        postings: list[InvestmentPosting] = []
+        if self.commission_amount:
             postings.append(
-                InvestmentPosting.amount_posting(source_account, discount_amount, currency)
+                InvestmentPosting.amount_posting(
+                    self.commission_account,
+                    self.commission_amount,
+                    self.currency,
+                )
             )
-        postings.append(
-            InvestmentPosting.amount_posting(discount_account, -discount_amount, currency)
+        discount_amount = self.discount.amount
+        if discount_amount:
+            if self.discount.is_cashback:
+                postings.append(
+                    InvestmentPosting.amount_posting(
+                        self.row.source_account,
+                        discount_amount,
+                        self.currency,
+                    )
+                )
+            postings.append(
+                InvestmentPosting.amount_posting(
+                    self.discount_account,
+                    -discount_amount,
+                    self.currency,
+                )
+            )
+        return tuple(postings)
+
+    @property
+    def row(self) -> ReviewRow:
+        return self.trade.row
+
+    @cached_property
+    def amount(self) -> Decimal:
+        return self.row.decimal_field("amount")
+
+    @cached_property
+    def price(self) -> Price | None:
+        return _price_for_trade(
+            self.row,
+            self.trade.commodity,
+            self.price_date,
+            self.prices,
         )
-    return postings
+
+    @cached_property
+    def account(self) -> str:
+        return self.fund_config.account_for_asset_class(self.trade.commodity.asset_class)
+
+    @property
+    def currency(self) -> str:
+        return self.row.currency or "CNY"
+
+    @cached_property
+    def discount(self) -> DiscountAmount:
+        return DiscountAmount.parse(self.row.discount_amount)
+
+    @cached_property
+    def discount_account(self) -> str:
+        return self.row.discount_account or self.fund_config.discount_income_account
+
+    @cached_property
+    def commission_amount(self) -> Decimal:
+        return self.row.nonnegative_decimal_field("commission_amount", "0")
+
+    @cached_property
+    def commission_account(self) -> str:
+        return self.row.commission_account or self.fund_config.commission_account
+
+    @cached_property
+    def net_fee(self) -> Decimal:
+        return self.commission_amount - self.discount.fee_deduction
+
+    @cached_property
+    def trade_amount(self) -> Decimal:
+        if self.trade.side == "buy":
+            return self.amount - self.net_fee
+        return self.amount + self.net_fee
 
 
 def _price_for_trade(
