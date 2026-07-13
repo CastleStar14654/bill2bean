@@ -194,7 +194,7 @@ def export_beancount(
     Path(output).write_text(text, encoding="utf-8")
 
 
-def _duplicate_parent_redirects(rows: list[ReviewRow]) -> dict[str, str]:
+def _duplicate_parent_redirects(rows: tuple[ReviewRow, ...]) -> dict[str, str]:
     redirects: dict[str, str] = {}
     for row in rows:
         if not row.uid:
@@ -241,14 +241,14 @@ def _format_header(
 
 @dataclass(frozen=True)
 class ReviewRowFilter:
-    rows: list[ReviewRow]
+    rows: list[ReviewRow] | tuple[ReviewRow, ...]
     include_sources: set[str] | None = None
     exclude_sources: set[str] | None = None
     start_date: str = ""
     end_date: str = ""
 
     @cached_property
-    def filtered_rows(self) -> list[ReviewRow]:
+    def filtered_rows(self) -> tuple[ReviewRow, ...]:
         self.validate_date_range()
         include_sources = self.include_sources or set()
         exclude_sources = self.exclude_sources or set()
@@ -265,7 +265,7 @@ class ReviewRowFilter:
             if self.end_date and row_date > self.end_date:
                 continue
             filtered.append(row)
-        return filtered
+        return tuple(filtered)
 
     def validate_date_range(self) -> None:
         parsed_start = self.parse_filter_date(self.start_date, "--start-date")
@@ -288,7 +288,7 @@ class ReviewRowFilter:
 @dataclass(frozen=True)
 class BeanExporter:
     defaults: ExportDefaults = field(default_factory=ExportDefaults)
-    rows: list[ReviewRow] = field(default_factory=list)
+    rows: tuple[ReviewRow, ...] = field(default_factory=tuple)
 
     @cached_property
     def cashback_by_parent(self) -> dict[str, list[ReviewRow]]:
@@ -303,6 +303,18 @@ class BeanExporter:
                 cashbacks.setdefault(parent_uid, []).append(row)
         return cashbacks
 
+    @cached_property
+    def transaction_drafts(self) -> tuple[TransactionDraft, ...]:
+        drafts: list[TransactionDraft] = []
+        for row in self.rows:
+            draft = self.build_transaction_draft(
+                row,
+                self.cashback_by_parent.get(row["uid"], []),
+            )
+            if draft:
+                drafts.append(draft)
+        return tuple(drafts)
+
     def render(
         self,
         include_accounts: str = "",
@@ -310,17 +322,7 @@ class BeanExporter:
         operating_currency: str = "",
         investment_header_options: bool = False,
     ) -> str:
-        chunks: list[str] = []
-        for row in self.rows:
-            draft = self.build_transaction_draft(
-                row,
-                self.cashback_by_parent.get(row["uid"], []),
-            )
-            if not draft:
-                continue
-            chunk = draft.format()
-            if chunk:
-                chunks.append(chunk)
+        chunks = [draft.format() for draft in self.transaction_drafts]
         parts = _format_header(
             include_accounts,
             include_files or [],
@@ -332,13 +334,7 @@ class BeanExporter:
 
     def required_accounts(self) -> set[str]:
         accounts: set[str] = set()
-        for row in self.rows:
-            draft = self.build_transaction_draft(
-                row,
-                self.cashback_by_parent.get(row["uid"], []),
-            )
-            if not draft:
-                continue
+        for draft in self.transaction_drafts:
             accounts.update(posting.account for posting in draft.postings if posting.account)
         return accounts
 

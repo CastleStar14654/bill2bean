@@ -238,7 +238,7 @@ class InvestmentTransactionDraft:
 
 @dataclass(frozen=True)
 class InvestmentExporter:
-    rows: list[ReviewRow]
+    rows: tuple[ReviewRow, ...]
     commodity_source: InvestmentCommoditySource
     price_source: InvestmentPriceSource
     fund_config: FundConfig
@@ -328,7 +328,7 @@ def render_fund_export(
     bean_price_command: str = "bean-price",
 ) -> InvestmentExportResult:
     return InvestmentExporter(
-        rows,
+        tuple(rows),
         InvestmentCommoditySource(commodities_path),
         InvestmentPriceSource.from_text(price_text),
         fund_config,
@@ -343,7 +343,7 @@ def required_accounts_for_fund_export(
     fund_config: FundConfig,
 ) -> set[str]:
     return InvestmentExporter(
-        rows,
+        tuple(rows),
         InvestmentCommoditySource(commodities_path),
         InvestmentPriceSource.from_text(""),
         fund_config,
