@@ -353,6 +353,8 @@ class InvestmentExporter:
             ("import_id", row.uid),
             ("price_date", price_date),
         ]
+        if row.get("notes"):
+            metadata.append(("note", row["notes"]))
         postings = FundTradePostings(
             trade,
             self.fund_config,
