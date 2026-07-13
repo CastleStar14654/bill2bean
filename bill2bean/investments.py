@@ -59,7 +59,44 @@ class InvestmentCommodities:
 
     @cached_property
     def items(self) -> list[InvestmentCommodity]:
-        return parse_commodities(self.path)
+        return self.parse_text(Path(self.path).read_text(encoding="utf-8"))
+
+    @staticmethod
+    def parse_text(text: str) -> list[InvestmentCommodity]:
+        commodities: list[InvestmentCommodity] = []
+        current_symbol = ""
+        metadata: dict[str, str] = {}
+        commodity_re = re.compile(r"^\d{4}-\d{2}-\d{2}\s+commodity\s+(\S+)")
+        meta_re = re.compile(r'^\s+([A-Za-z0-9_-]+):\s+"(.*)"\s*$')
+
+        def flush() -> None:
+            nonlocal current_symbol, metadata
+            if current_symbol and metadata.get("name"):
+                commodities.append(
+                    InvestmentCommodity(
+                        symbol=current_symbol,
+                        name=metadata.get("name", ""),
+                        asset_class=metadata.get("asset-class", "fund"),
+                        price_source=metadata.get("price", ""),
+                        settlement_days=_metadata_int(metadata, "settlement-days")
+                        if "settlement-days" in metadata
+                        else _metadata_int(metadata, "settlement_days"),
+                    )
+                )
+            current_symbol = ""
+            metadata = {}
+
+        for line in text.splitlines():
+            commodity_match = commodity_re.match(line)
+            if commodity_match:
+                flush()
+                current_symbol = commodity_match.group(1)
+                continue
+            meta_match = meta_re.match(line)
+            if meta_match and current_symbol:
+                metadata[meta_match.group(1)] = meta_match.group(2)
+        flush()
+        return commodities
 
 
 @dataclass(frozen=True)
@@ -86,14 +123,43 @@ class InvestmentPrices:
 
     @cached_property
     def existing_directives(self) -> str:
-        return extract_price_directives(self.text)
+        return self.extract_directives(self.text)
 
     @cached_property
     def existing_prices(self) -> dict[tuple[str, str], Price]:
-        return parse_prices(self.text)
+        return self.parse_text(self.text)
 
     def merged_with(self, fetched_prices: str) -> str:
-        return merge_price_directives(self.existing_directives, fetched_prices)
+        return self.merge_directives(self.existing_directives, fetched_prices)
+
+    @staticmethod
+    def parse_text(text: str) -> dict[tuple[str, str], Price]:
+        prices: dict[tuple[str, str], Price] = {}
+        for line in text.splitlines():
+            match = PRICE_DIRECTIVE_RE.match(line)
+            if not match:
+                continue
+            date_text, symbol, amount, currency = match.groups()
+            prices[(date_text, symbol)] = Price(Decimal(amount), currency)
+        return prices
+
+    @staticmethod
+    def extract_directives(text: str) -> str:
+        lines = [line for line in text.splitlines() if PRICE_DIRECTIVE_RE.match(line)]
+        return "\n".join(lines).rstrip() + "\n" if lines else ""
+
+    @staticmethod
+    def merge_directives(*texts: str) -> str:
+        keyed_lines: dict[tuple[str, str, str], str] = {}
+        for text in texts:
+            for line in text.splitlines():
+                match = PRICE_DIRECTIVE_RE.match(line)
+                if not match:
+                    continue
+                date_text, symbol, _amount, currency = match.groups()
+                keyed_lines[(date_text, symbol, currency)] = line
+        lines = [keyed_lines[key] for key in sorted(keyed_lines)]
+        return "\n".join(lines).rstrip() + "\n" if lines else ""
 
 
 @dataclass(frozen=True)
@@ -203,7 +269,7 @@ class InvestmentExporter:
 
     @cached_property
     def price_table(self) -> dict[tuple[str, str], Price]:
-        return parse_prices(
+        return InvestmentPrices.parse_text(
             "\n".join(part for part in [self.prices.text, self.fetched_prices] if part)
         )
 
@@ -277,69 +343,19 @@ def required_accounts_for_fund_export(
 
 
 def parse_commodities(path: str | Path) -> list[InvestmentCommodity]:
-    commodities: list[InvestmentCommodity] = []
-    current_symbol = ""
-    metadata: dict[str, str] = {}
-    commodity_re = re.compile(r"^\d{4}-\d{2}-\d{2}\s+commodity\s+(\S+)")
-    meta_re = re.compile(r'^\s+([A-Za-z0-9_-]+):\s+"(.*)"\s*$')
-
-    def flush() -> None:
-        nonlocal current_symbol, metadata
-        if current_symbol and metadata.get("name"):
-            commodities.append(
-                InvestmentCommodity(
-                    symbol=current_symbol,
-                    name=metadata.get("name", ""),
-                    asset_class=metadata.get("asset-class", "fund"),
-                    price_source=metadata.get("price", ""),
-                    settlement_days=_metadata_int(metadata, "settlement-days")
-                    if "settlement-days" in metadata
-                    else _metadata_int(metadata, "settlement_days"),
-                )
-            )
-        current_symbol = ""
-        metadata = {}
-
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
-        commodity_match = commodity_re.match(line)
-        if commodity_match:
-            flush()
-            current_symbol = commodity_match.group(1)
-            continue
-        meta_match = meta_re.match(line)
-        if meta_match and current_symbol:
-            metadata[meta_match.group(1)] = meta_match.group(2)
-    flush()
-    return commodities
+    return InvestmentCommodities(path).items
 
 
 def parse_prices(text: str) -> dict[tuple[str, str], Price]:
-    prices: dict[tuple[str, str], Price] = {}
-    for line in text.splitlines():
-        match = PRICE_DIRECTIVE_RE.match(line)
-        if not match:
-            continue
-        date_text, symbol, amount, currency = match.groups()
-        prices[(date_text, symbol)] = Price(Decimal(amount), currency)
-    return prices
+    return InvestmentPrices.parse_text(text)
 
 
 def extract_price_directives(text: str) -> str:
-    lines = [line for line in text.splitlines() if PRICE_DIRECTIVE_RE.match(line)]
-    return "\n".join(lines).rstrip() + "\n" if lines else ""
+    return InvestmentPrices.extract_directives(text)
 
 
 def merge_price_directives(*texts: str) -> str:
-    keyed_lines: dict[tuple[str, str, str], str] = {}
-    for text in texts:
-        for line in text.splitlines():
-            match = PRICE_DIRECTIVE_RE.match(line)
-            if not match:
-                continue
-            date_text, symbol, _amount, currency = match.groups()
-            keyed_lines[(date_text, symbol, currency)] = line
-    lines = [keyed_lines[key] for key in sorted(keyed_lines)]
-    return "\n".join(lines).rstrip() + "\n" if lines else ""
+    return InvestmentPrices.merge_directives(*texts)
 
 
 def missing_price_dates(
