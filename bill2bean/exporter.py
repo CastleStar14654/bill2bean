@@ -174,13 +174,16 @@ def export_beancount(
     defaults: ExportDefaults | None = None,
 ) -> None:
     all_rows = read_review_csv(review_csv)
-    text = BeanExporter(
-        defaults or ExportDefaults(),
-        rows=all_rows,
+    filtered_rows = ReviewRowFilter(
+        all_rows,
         include_sources=include_sources,
         exclude_sources=exclude_sources,
         start_date=start_date,
         end_date=end_date,
+    ).filtered_rows
+    text = BeanExporter(
+        defaults or ExportDefaults(),
+        rows=filtered_rows,
     ).render(
         include_accounts=include_accounts,
         include_files=include_files,
@@ -188,24 +191,6 @@ def export_beancount(
         investment_header_options=investment_header_options,
     )
     Path(output).write_text(text, encoding="utf-8")
-
-
-def _validate_date_range(start_date: str, end_date: str) -> None:
-    parsed_start = _parse_filter_date(start_date, "--start-date")
-    parsed_end = _parse_filter_date(end_date, "--end-date")
-    if parsed_start and parsed_end and parsed_start > parsed_end:
-        raise ValueError("--start-date cannot be later than --end-date")
-
-
-def _parse_filter_date(value: str, option: str) -> date | None:
-    if not value:
-        return None
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
-        raise ValueError(f"{option} must use YYYY-MM-DD")
-    try:
-        return date.fromisoformat(value)
-    except ValueError as exc:
-        raise ValueError(f"{option} is not a valid date") from exc
 
 
 def _duplicate_parent_redirects(rows: list[ReviewRow]) -> dict[str, str]:
@@ -254,9 +239,8 @@ def _format_header(
 
 
 @dataclass(frozen=True)
-class BeanExporter:
-    defaults: ExportDefaults = field(default_factory=ExportDefaults)
-    rows: list[ReviewRow] = field(default_factory=list)
+class ReviewRowFilter:
+    rows: list[ReviewRow]
     include_sources: set[str] | None = None
     exclude_sources: set[str] | None = None
     start_date: str = ""
@@ -264,7 +248,7 @@ class BeanExporter:
 
     @cached_property
     def filtered_rows(self) -> list[ReviewRow]:
-        _validate_date_range(self.start_date, self.end_date)
+        self.validate_date_range()
         include_sources = self.include_sources or set()
         exclude_sources = self.exclude_sources or set()
         filtered: list[ReviewRow] = []
@@ -281,6 +265,29 @@ class BeanExporter:
                 continue
             filtered.append(row)
         return filtered
+
+    def validate_date_range(self) -> None:
+        parsed_start = self.parse_filter_date(self.start_date, "--start-date")
+        parsed_end = self.parse_filter_date(self.end_date, "--end-date")
+        if parsed_start and parsed_end and parsed_start > parsed_end:
+            raise ValueError("--start-date cannot be later than --end-date")
+
+    @staticmethod
+    def parse_filter_date(value: str, option: str) -> date | None:
+        if not value:
+            return None
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            raise ValueError(f"{option} must use YYYY-MM-DD")
+        try:
+            return date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError(f"{option} is not a valid date") from exc
+
+
+@dataclass(frozen=True)
+class BeanExporter:
+    defaults: ExportDefaults = field(default_factory=ExportDefaults)
+    rows: list[ReviewRow] = field(default_factory=list)
 
     @cached_property
     def cashback_by_parent(self) -> dict[str, list[ReviewRow]]:
@@ -303,7 +310,7 @@ class BeanExporter:
         investment_header_options: bool = False,
     ) -> str:
         chunks: list[str] = []
-        for row in self.filtered_rows:
+        for row in self.rows:
             draft = self.build_transaction_draft(
                 row,
                 self.cashback_by_parent.get(row["uid"], []),
@@ -324,7 +331,7 @@ class BeanExporter:
 
     def required_accounts(self) -> set[str]:
         accounts: set[str] = set()
-        for row in self.filtered_rows:
+        for row in self.rows:
             draft = self.build_transaction_draft(
                 row,
                 self.cashback_by_parent.get(row["uid"], []),

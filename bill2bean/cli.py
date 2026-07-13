@@ -5,7 +5,7 @@ import getpass
 import sys
 
 from .config import Config
-from .exporter import BeanExporter, ExportDefaults
+from .exporter import BeanExporter, ExportDefaults, ReviewRowFilter
 from .investments import (
     InvestmentExporter,
     extract_price_directives,
@@ -130,19 +130,19 @@ def main(argv: list[str] | None = None) -> int:
         args.price_output = args.output
     config = Config.load(args.config)
     export_defaults = ExportDefaults.from_config(config)
-    exporter = BeanExporter(
-        export_defaults,
-        rows=rows,
+    row_filter = ReviewRowFilter(
+        rows,
         include_sources=include_sources,
         exclude_sources=exclude_sources,
         start_date=args.start_date,
         end_date=args.end_date,
     )
     try:
-        filtered_rows = exporter.filtered_rows
+        filtered_rows = row_filter.filtered_rows
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    exporter = BeanExporter(export_defaults, rows=filtered_rows)
     price_text = read_text_if_exists(args.price_output) if fund_enabled else ""
     investment_exporter = (
         InvestmentExporter(
