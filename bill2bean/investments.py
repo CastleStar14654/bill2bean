@@ -40,6 +40,46 @@ class FundTrade:
     commodity: InvestmentCommodity
     side: str
 
+    @classmethod
+    def from_row(
+        cls,
+        row: ReviewRow,
+        commodities: list[InvestmentCommodity],
+    ) -> "FundTrade | None":
+        text = " ".join([row.payee, row.narration])
+        for commodity in sorted(commodities, key=lambda item: len(item.name), reverse=True):
+            if commodity.name not in text:
+                continue
+            if f"{commodity.name}-买入" in row.narration:
+                return cls(row, commodity, "buy")
+            if f"{commodity.name}-卖出" in row.narration:
+                return cls(row, commodity, "sell")
+        return None
+
+    @property
+    def narration(self) -> str:
+        marker = "买入" if self.side == "buy" else "卖出"
+        return f"{self.commodity.name}-{marker}"
+
+    def price_date(self, fund_config: FundConfig) -> date:
+        if self.row.investment_price_date:
+            return date.fromisoformat(self.row.investment_price_date)
+        row_time = datetime.fromisoformat(self.row.time)
+        if self.side == "buy":
+            trade_date = row_time.date()
+            if row_time.time() >= time(15, 0):
+                return next_business_day(trade_date)
+            return business_day_on_or_after(trade_date)
+        settlement_anchor = previous_business_day_on_or_before(row_time.date())
+        if row_time.time() < time(15, 0):
+            settlement_anchor = previous_business_day(settlement_anchor)
+        settlement_days = self.commodity.settlement_days
+        if settlement_days is None:
+            settlement_days = fund_config.settlement_days_for_text(
+                self.commodity.settlement_text()
+            )
+        return subtract_business_days(settlement_anchor, settlement_days)
+
 
 @dataclass(frozen=True)
 class Price:
@@ -251,7 +291,7 @@ class InvestmentExporter:
             trade
             for row in self.rows
             if row.action == "invest"
-            for trade in [_fund_trade_for_row(row, self.commodity_source.items)]
+            for trade in [FundTrade.from_row(row, self.commodity_source.items)]
             if trade is not None
         ]
 
@@ -287,7 +327,7 @@ class InvestmentExporter:
 
     def build_transaction_draft(self, trade: FundTrade) -> InvestmentTransactionDraft:
         row = trade.row
-        price_date = _price_date_for_trade(trade, self.fund_config).isoformat()
+        price_date = trade.price_date(self.fund_config).isoformat()
         metadata = [
             ("source", row.source),
             ("import_id", row.uid),
@@ -302,7 +342,7 @@ class InvestmentExporter:
         return InvestmentTransactionDraft(
             date=row.posting_date,
             payee=row.payee,
-            narration=_fund_narration(row, trade),
+            narration=trade.narration,
             metadata=metadata,
             postings=postings,
             tags_links=format_tags_links(row.get("tags", ""), row.get("links", "")),
@@ -395,7 +435,7 @@ def missing_price_dates(
     for trade in trades:
         if trade.row.investment_price:
             continue
-        price_date = _price_date_for_trade(trade, fund_config)
+        price_date = trade.price_date(fund_config)
         required_symbols_by_date.setdefault(price_date, set()).add(trade.commodity.symbol)
     return sorted(
         price_date
@@ -477,40 +517,7 @@ def _truncate(text: str, limit: int = 240) -> str:
 
 
 def price_date_for_trade(trade: FundTrade, fund_config: FundConfig) -> date:
-    row_time = datetime.fromisoformat(trade.row.time)
-    if trade.side == "buy":
-        trade_date = row_time.date()
-        if row_time.time() >= time(15, 0):
-            return next_business_day(trade_date)
-        return business_day_on_or_after(trade_date)
-    settlement_anchor = previous_business_day_on_or_before(row_time.date())
-    if row_time.time() < time(15, 0):
-        settlement_anchor = previous_business_day(settlement_anchor)
-    settlement_days = trade.commodity.settlement_days
-    if settlement_days is None:
-        settlement_days = fund_config.settlement_days_for_text(trade.commodity.settlement_text())
-    return subtract_business_days(settlement_anchor, settlement_days)
-
-
-def _price_date_for_trade(trade: FundTrade, fund_config: FundConfig) -> date:
-    if trade.row.investment_price_date:
-        return date.fromisoformat(trade.row.investment_price_date)
-    return price_date_for_trade(trade, fund_config)
-
-
-def _fund_trade_for_row(
-    row: ReviewRow,
-    commodities: list[InvestmentCommodity],
-) -> FundTrade | None:
-    text = " ".join([row.payee, row.narration])
-    for commodity in sorted(commodities, key=lambda item: len(item.name), reverse=True):
-        if commodity.name not in text:
-            continue
-        if f"{commodity.name}-买入" in row.narration:
-            return FundTrade(row, commodity, "buy")
-        if f"{commodity.name}-卖出" in row.narration:
-            return FundTrade(row, commodity, "sell")
-    return None
+    return trade.price_date(fund_config)
 
 
 @dataclass(frozen=True)
@@ -646,12 +653,9 @@ class FundTradePostings:
 
     @cached_property
     def price(self) -> Price | None:
-        return _price_for_trade(
-            self.row,
-            self.trade.commodity,
-            self.price_date,
-            self.prices,
-        )
+        if self.row.investment_price:
+            return Price(self.row.decimal_field("investment_price"), "CNY")
+        return self.prices.get((self.price_date, self.trade.commodity.symbol))
 
     @cached_property
     def account(self) -> str:
@@ -688,17 +692,6 @@ class FundTradePostings:
         return self.amount + self.net_fee
 
 
-def _price_for_trade(
-    row: ReviewRow,
-    commodity: InvestmentCommodity,
-    price_date: str,
-    prices: dict[tuple[str, str], Price],
-) -> Price | None:
-    if row.investment_price:
-        return Price(row.decimal_field("investment_price"), "CNY")
-    return prices.get((price_date, commodity.symbol))
-
-
 def _units(
     row: ReviewRow,
     amount: Decimal,
@@ -709,11 +702,6 @@ def _units(
         return row.investment_units
     quantum = Decimal(1).scaleb(-precision)
     return str((amount / price).quantize(quantum, rounding=ROUND_HALF_UP))
-
-
-def _fund_narration(row: ReviewRow, trade: FundTrade) -> str:
-    marker = "买入" if trade.side == "buy" else "卖出"
-    return f"{trade.commodity.name}-{marker}"
 
 
 def _metadata_int(metadata: dict[str, str], key: str) -> int | None:
