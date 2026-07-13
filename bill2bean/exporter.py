@@ -497,11 +497,9 @@ class OutflowPostings(TransactionPostings):
             if self.amount >= 0
             else self.amount - discount_amount
         )
-        aa_amount = self.aa_amount()
-        share_amount = self.share_amount(aa_amount)
-        self.reject_priced_split(aa_amount, share_amount)
-        target_amount = gross_amount - aa_amount - share_amount
-        if aa_amount or share_amount:
+        self.reject_priced_split()
+        target_amount = gross_amount - self.aa_amount - self.share_amount
+        if self.aa_amount or self.share_amount:
             if target_amount:
                 postings.append(
                     Posting.plain(
@@ -511,21 +509,21 @@ class OutflowPostings(TransactionPostings):
                         self.currency,
                     )
                 )
-            if aa_amount:
+            if self.aa_amount:
                 postings.append(
                     Posting.plain(
                         self.row,
                         self.required_account("aa_account"),
-                        aa_amount,
+                        self.aa_amount,
                         self.currency,
                     )
                 )
-            if share_amount:
+            if self.share_amount:
                 postings.append(
                     Posting.plain(
                         self.row,
                         self.required_account("share_account"),
-                        share_amount,
+                        self.share_amount,
                         self.currency,
                     )
                 )
@@ -547,7 +545,9 @@ class OutflowPostings(TransactionPostings):
                     self.currency,
                 )
             )
-        source_amount = self.apply_cashbacks(postings, source_amount)
+        cashback_postings, cashback_adjustment = self.cashback_postings()
+        postings.extend(cashback_postings)
+        source_amount -= cashback_adjustment
         postings.append(
             Posting.plain(
                 self.row,
@@ -558,23 +558,25 @@ class OutflowPostings(TransactionPostings):
         )
         return postings
 
+    @cached_property
     def aa_amount(self) -> Decimal:
         return self.row.nonnegative_decimal_field("aa_amount", "0")
 
-    def reject_priced_split(self, aa_amount: Decimal, share_amount: Decimal) -> None:
+    def reject_priced_split(self) -> None:
         if not self.row.get("original_amount") and not self.row.get("original_currency"):
             return
-        if aa_amount:
+        if self.aa_amount:
             raise ValueError(
                 "aa_amount is not supported with original_amount/original_currency"
                 f"{self.row.context()}"
             )
-        if share_amount:
+        if self.share_amount:
             raise ValueError(
                 f"share is not supported with original_amount/original_currency{self.row.context()}"
             )
 
-    def share_amount(self, aa_amount: Decimal) -> Decimal:
+    @cached_property
+    def share_amount(self) -> Decimal:
         if not self.allow_share:
             return Decimal("0")
 
@@ -587,26 +589,24 @@ class OutflowPostings(TransactionPostings):
         if not share:
             return Decimal("0")
         if share == "split":
-            return ((self.amount - aa_amount) / Decimal("2")).quantize(Decimal("0.01"))
+            return ((self.amount - self.aa_amount) / Decimal("2")).quantize(Decimal("0.01"))
         if share == "whole":
-            return self.amount - aa_amount
+            return self.amount - self.aa_amount
         if share == "custom":
             if not share_amount:
                 raise ValueError(f"share='custom' requires share_amount{self.row.context()}")
             return self.row.nonnegative_decimal_field("share_amount")
         raise ValueError(f"unsupported share value {share!r}{self.row.context()}")
 
-    def apply_cashbacks(
-        self,
-        postings: list[Posting],
-        source_amount: Decimal,
-    ) -> Decimal:
+    def cashback_postings(self) -> tuple[list[Posting], Decimal]:
+        postings: list[Posting] = []
+        adjustment = Decimal("0")
         for cashback in self.cashbacks:
             cb_amount = cashback.decimal_field("amount")
-            source_amount -= cb_amount
+            adjustment += cb_amount
             income_account = self.exporter.required_account(cashback, "income_account")
             postings.append(Posting.plain(self.row, income_account, -cb_amount, self.currency))
-        return source_amount
+        return postings, adjustment
 
 
 @dataclass(frozen=True)
