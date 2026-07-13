@@ -297,11 +297,35 @@ class InvestmentExporter:
 
     @cached_property
     def missing_dates(self) -> list[date]:
-        return missing_price_dates(
-            self.trades,
-            self.fund_config,
-            self.price_source.existing_prices,
+        required_symbols_by_date: dict[date, set[str]] = {}
+        for trade in self.trades:
+            if trade.row.investment_price:
+                continue
+            price_date = self.price_date_for(trade)
+            required_symbols_by_date.setdefault(price_date, set()).add(
+                trade.commodity.symbol
+            )
+        return sorted(
+            price_date
+            for price_date, symbols in required_symbols_by_date.items()
+            if any(
+                (price_date.isoformat(), symbol) not in self.price_source.existing_prices
+                for symbol in symbols
+            )
         )
+
+    @cached_property
+    def price_dates_by_uid(self) -> dict[str, date]:
+        return {
+            trade.row.uid: trade.price_date(self.fund_config)
+            for trade in self.trades
+            if trade.row.uid
+        }
+
+    def price_date_for(self, trade: FundTrade) -> date:
+        if trade.row.uid:
+            return self.price_dates_by_uid[trade.row.uid]
+        return trade.price_date(self.fund_config)
 
     @cached_property
     def fetched_prices(self) -> str:
@@ -327,7 +351,7 @@ class InvestmentExporter:
 
     def build_transaction_draft(self, trade: FundTrade) -> InvestmentTransactionDraft:
         row = trade.row
-        price_date = trade.price_date(self.fund_config).isoformat()
+        price_date = self.price_date_for(trade).isoformat()
         metadata = [
             ("source", row.source),
             ("import_id", row.uid),
@@ -424,24 +448,6 @@ def extract_price_directives(text: str) -> str:
 
 def merge_price_directives(*texts: str) -> str:
     return InvestmentPriceSource.merge_directives(*texts)
-
-
-def missing_price_dates(
-    trades: list[FundTrade],
-    fund_config: FundConfig,
-    existing_prices: dict[tuple[str, str], Price],
-) -> list[date]:
-    required_symbols_by_date: dict[date, set[str]] = {}
-    for trade in trades:
-        if trade.row.investment_price:
-            continue
-        price_date = trade.price_date(fund_config)
-        required_symbols_by_date.setdefault(price_date, set()).add(trade.commodity.symbol)
-    return sorted(
-        price_date
-        for price_date, symbols in required_symbols_by_date.items()
-        if any((price_date.isoformat(), symbol) not in existing_prices for symbol in symbols)
-    )
 
 
 def fetch_price_directives(
