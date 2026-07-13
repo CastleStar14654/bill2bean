@@ -16,6 +16,17 @@ from .parsers import parser_for
 
 
 def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command == "review":
+        return run_review(args)
+    if args.command == "export":
+        return run_export(args)
+    parser.error(f"unsupported command {args.command!r}")
+    return 2
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="bill2bean")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -58,9 +69,22 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         help="do not export these sources; can be repeated or comma-separated",
     )
-    export.add_argument("--start-date", default="", help="only export rows on or after YYYY-MM-DD")
-    export.add_argument("--end-date", default="", help="only export rows on or before YYYY-MM-DD")
-    export.add_argument("-c", "--config", default="config.toml", help="config used for investment export")
+    export.add_argument(
+        "--start-date",
+        default="",
+        help="only export rows on or after YYYY-MM-DD",
+    )
+    export.add_argument(
+        "--end-date",
+        default="",
+        help="only export rows on or before YYYY-MM-DD",
+    )
+    export.add_argument(
+        "-c",
+        "--config",
+        default="config.toml",
+        help="config used for investment export",
+    )
     export.add_argument("--fund-commodities", help="commodity bean file for Alipay fund trades")
     export.add_argument(
         "--fund-output",
@@ -84,28 +108,36 @@ def main(argv: list[str] | None = None) -> int:
         default="bean-price",
         help="bean-price executable used with --fetch-fund-prices",
     )
+    return parser
 
-    args = parser.parse_args(argv)
-    if args.command == "review":
-        config = Config.load(args.config)
-        txs = []
-        try:
-            for filename in args.files:
-                txs.extend(
-                    parser_for(
-                        filename,
-                        config,
-                        zip_password_provider=_zip_password_provider(args.zip_password),
-                    ).parse(filename)
-                )
-            previous_rows = read_review_csv(args.previous_review) if args.previous_review else None
-            TransactionList(txs, config).normalize().write_review_csv(args.output, previous_rows)
-        except ValueError as exc:
-            print(str(exc), file=sys.stderr)
-            return 2
-        print(f"wrote {args.output} with {len(txs)} rows")
-        return 0
 
+def run_review(args: argparse.Namespace) -> int:
+    config = Config.load(args.config)
+    txs = []
+    try:
+        for filename in args.files:
+            txs.extend(
+                parser_for(
+                    filename,
+                    config,
+                    zip_password_provider=_zip_password_provider(args.zip_password),
+                ).parse(filename)
+            )
+        previous_rows = (
+            read_review_csv(args.previous_review) if args.previous_review else None
+        )
+        TransactionList(txs, config).normalize().write_review_csv(
+            args.output,
+            previous_rows,
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    print(f"wrote {args.output} with {len(txs)} rows")
+    return 0
+
+
+def run_export(args: argparse.Namespace) -> int:
     if args.with_header and not args.accounts:
         print("--with-header requires --accounts", file=sys.stderr)
         return 2
@@ -113,21 +145,11 @@ def main(argv: list[str] | None = None) -> int:
     include_sources = parse_values(args.include_source)
     exclude_sources = parse_values(args.exclude_source)
     rows = read_review_csv(args.review_csv)
-    fund_enabled = any(
-        [args.fund_commodities, args.fund_output is not None, args.price_output is not None]
-    )
-    if fund_enabled and not all(
-        [args.fund_commodities, args.fund_output is not None, args.price_output is not None]
-    ):
-        print(
-            "--fund-commodities, --fund-output, and --price-output must be used together",
-            file=sys.stderr,
-        )
+    try:
+        fund_enabled = normalize_fund_outputs(args)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
         return 2
-    if args.fund_output == "":
-        args.fund_output = args.output
-    if args.price_output == "":
-        args.price_output = args.output
     config = Config.load(args.config)
     export_defaults = ExportDefaults.from_config(config)
     row_filter = ReviewRowFilter(
@@ -146,45 +168,21 @@ def main(argv: list[str] | None = None) -> int:
     investment_price_source = (
         InvestmentPriceSource.from_path(args.price_output) if fund_enabled else None
     )
-    investment_exporter = (
-        InvestmentExporter(
-            filtered_rows,
-            InvestmentCommoditySource(args.fund_commodities),
-            investment_price_source,
-            config.funds,
-            fetch_prices=args.fetch_fund_prices,
-            bean_price_command=args.bean_price_command,
-        )
-        if fund_enabled
-        else None
+    investment_exporter = create_investment_exporter(
+        args,
+        filtered_rows,
+        config,
+        investment_price_source,
     )
     try:
-        if args.accounts:
-            required_accounts = exporter.required_accounts()
-            if investment_exporter:
-                required_accounts |= investment_exporter.required_accounts()
-            missing = sorted(required_accounts - extract_accounts(args.accounts))
-            if missing:
-                print("unknown accounts:", file=sys.stderr)
-                for account in missing:
-                    print(f"  {account}", file=sys.stderr)
-                return 2
-        normal_text = exporter.render(
-            include_accounts=args.accounts if args.with_header else "",
-            include_files=[args.fund_commodities] if fund_enabled and args.with_header else [],
-            operating_currency=args.operating_currency if args.with_header else "",
-            investment_header_options=fund_enabled and args.with_header,
+        validate_accounts(args.accounts, exporter, investment_exporter)
+        outputs = build_export_outputs(
+            args,
+            fund_enabled,
+            exporter,
+            investment_exporter,
+            investment_price_source,
         )
-        outputs: dict[str, list[str]] = {args.output: [normal_text]}
-        if investment_exporter:
-            if investment_transactions := investment_exporter.render_transactions():
-                outputs.setdefault(args.fund_output, []).append(
-                    investment_transactions
-                )
-            investment_prices = investment_exporter.render_prices()
-            if investment_price_source.existing_directives or investment_prices:
-                merged_prices = investment_price_source.merged_with(investment_prices)
-                outputs.setdefault(args.price_output, []).append(merged_prices)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -193,6 +191,105 @@ def main(argv: list[str] | None = None) -> int:
     for output in outputs:
         print(f"wrote {output}")
     return 0
+
+
+def normalize_fund_outputs(args: argparse.Namespace) -> bool:
+    fund_enabled = any(
+        [
+            args.fund_commodities,
+            args.fund_output is not None,
+            args.price_output is not None,
+        ]
+    )
+    if fund_enabled and not all(
+        [
+            args.fund_commodities,
+            args.fund_output is not None,
+            args.price_output is not None,
+        ]
+    ):
+        raise ValueError(
+            "--fund-commodities, --fund-output, and --price-output must be used together"
+        )
+    if args.fund_output == "":
+        args.fund_output = args.output
+    if args.price_output == "":
+        args.price_output = args.output
+    return fund_enabled
+
+
+def create_investment_exporter(
+    args: argparse.Namespace,
+    filtered_rows,
+    config: Config,
+    investment_price_source: InvestmentPriceSource | None,
+) -> InvestmentExporter | None:
+    if not investment_price_source:
+        return None
+    return InvestmentExporter(
+        filtered_rows,
+        InvestmentCommoditySource(args.fund_commodities),
+        investment_price_source,
+        config.funds,
+        fetch_prices=args.fetch_fund_prices,
+        bean_price_command=args.bean_price_command,
+    )
+
+
+def validate_accounts(
+    accounts_path: str | None,
+    exporter: BeanExporter,
+    investment_exporter: InvestmentExporter | None,
+) -> None:
+    if not accounts_path:
+        return
+    required_accounts = exporter.required_accounts()
+    if investment_exporter:
+        required_accounts |= investment_exporter.required_accounts()
+    missing = sorted(required_accounts - extract_accounts(accounts_path))
+    if not missing:
+        return
+    lines = ["unknown accounts:", *(f"  {account}" for account in missing)]
+    raise ValueError("\n".join(lines))
+
+
+def build_export_outputs(
+    args: argparse.Namespace,
+    fund_enabled: bool,
+    exporter: BeanExporter,
+    investment_exporter: InvestmentExporter | None,
+    investment_price_source: InvestmentPriceSource | None,
+) -> dict[str, list[str]]:
+    include_files = [args.fund_commodities] if fund_enabled and args.with_header else []
+    normal_text = exporter.render(
+        include_accounts=args.accounts if args.with_header else "",
+        include_files=include_files,
+        operating_currency=args.operating_currency if args.with_header else "",
+        investment_header_options=fund_enabled and args.with_header,
+    )
+    outputs: dict[str, list[str]] = {args.output: [normal_text]}
+    if investment_exporter and investment_price_source:
+        append_investment_outputs(
+            args,
+            outputs,
+            investment_exporter,
+            investment_price_source,
+        )
+    return outputs
+
+
+def append_investment_outputs(
+    args: argparse.Namespace,
+    outputs: dict[str, list[str]],
+    investment_exporter: InvestmentExporter,
+    investment_price_source: InvestmentPriceSource,
+) -> None:
+    if investment_transactions := investment_exporter.render_transactions():
+        outputs.setdefault(args.fund_output, []).append(investment_transactions)
+    investment_prices = investment_exporter.render_prices()
+    if investment_price_source.existing_directives or investment_prices:
+        merged_prices = investment_price_source.merged_with(investment_prices)
+        outputs.setdefault(args.price_output, []).append(merged_prices)
 
 
 def parse_values(values: list[str]) -> set[str]:
