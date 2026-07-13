@@ -439,7 +439,7 @@ class BeanExporter:
             tags_links=format_tags_links(row.get("tags", ""), row.get("links", "")),
         )
 
-    def required_account(
+    def account_for_required_field(
         self,
         row: ReviewRow,
         field: str,
@@ -460,8 +460,8 @@ class TransactionPostings:
     def build(self) -> list[Posting]:
         raise NotImplementedError
 
-    def required_account(self, field: str) -> str:
-        return self.exporter.required_account(self.row, field)
+    def account_for_required_field(self, field: str) -> str:
+        return self.exporter.account_for_required_field(self.row, field)
 
     def reject_present_fields(self, fields: tuple[str, ...], context: str) -> None:
         present = [field for field in fields if (self.row.get(field) or "").strip()]
@@ -501,7 +501,7 @@ class OutflowPostings(TransactionPostings):
                 postings.append(
                     Posting.plain(
                         self.row,
-                        self.required_account(self.target_account_field),
+                        self.account_for_required_field(self.target_account_field),
                         target_amount,
                         self.currency,
                     )
@@ -510,7 +510,7 @@ class OutflowPostings(TransactionPostings):
                 postings.append(
                     Posting.plain(
                         self.row,
-                        self.required_account("aa_account"),
+                        self.account_for_required_field("aa_account"),
                         self.aa_amount,
                         self.currency,
                     )
@@ -519,7 +519,7 @@ class OutflowPostings(TransactionPostings):
                 postings.append(
                     Posting.plain(
                         self.row,
-                        self.required_account("share_account"),
+                        self.account_for_required_field("share_account"),
                         self.share_amount,
                         self.currency,
                     )
@@ -528,7 +528,7 @@ class OutflowPostings(TransactionPostings):
             postings.append(
                 Posting.from_expense_amount_fields(
                     self.row,
-                    self.required_account(self.target_account_field),
+                    self.account_for_required_field(self.target_account_field),
                     gross_amount,
                     self.currency,
                 )
@@ -537,7 +537,7 @@ class OutflowPostings(TransactionPostings):
             postings.append(
                 Posting.plain(
                     self.row,
-                    self.required_account("discount_account"),
+                    self.account_for_required_field("discount_account"),
                     -discount_amount,
                     self.currency,
                 )
@@ -548,7 +548,7 @@ class OutflowPostings(TransactionPostings):
         postings.append(
             Posting.plain(
                 self.row,
-                self.required_account("source_account"),
+                self.account_for_required_field("source_account"),
                 -source_amount,
                 self.currency,
             )
@@ -601,7 +601,10 @@ class OutflowPostings(TransactionPostings):
         for cashback in self.cashbacks:
             cb_amount = cashback.decimal_field("amount")
             adjustment += cb_amount
-            income_account = self.exporter.required_account(cashback, "income_account")
+            income_account = self.exporter.account_for_required_field(
+                cashback,
+                "income_account",
+            )
             postings.append(Posting.plain(self.row, income_account, -cb_amount, self.currency))
         return postings, adjustment
 
@@ -617,13 +620,13 @@ class IncomePostings(TransactionPostings):
         return [
             Posting.plain(
                 self.row,
-                self.required_account("source_account"),
+                self.account_for_required_field("source_account"),
                 self.amount,
                 self.currency,
             ),
             Posting.plain(
                 self.row,
-                self.required_account("income_account"),
+                self.account_for_required_field("income_account"),
                 -self.amount,
                 self.currency,
             ),
@@ -661,7 +664,7 @@ class TransferPostings(TransactionPostings):
             postings.append(
                 Posting.with_total_price(
                     self.row,
-                    self.required_account(target_field),
+                    self.account_for_required_field(target_field),
                     self.amount,
                     self.currency,
                     original_amount,
@@ -671,7 +674,7 @@ class TransferPostings(TransactionPostings):
             postings.append(
                 Posting.plain(
                     self.row,
-                    self.required_account(source_field),
+                    self.account_for_required_field(source_field),
                     -original_amount,
                     original_currency,
                 )
@@ -687,7 +690,7 @@ class TransferPostings(TransactionPostings):
         postings.append(
             Posting.plain(
                 self.row,
-                self.required_account(target_field),
+                self.account_for_required_field(target_field),
                 target_amount,
                 self.currency,
             )
@@ -696,7 +699,7 @@ class TransferPostings(TransactionPostings):
             postings.append(
                 Posting.plain(
                     self.row,
-                    self.required_account("discount_account"),
+                    self.account_for_required_field("discount_account"),
                     -discount_amount,
                     self.currency,
                 )
@@ -705,7 +708,7 @@ class TransferPostings(TransactionPostings):
             postings.append(
                 Posting.plain(
                     self.row,
-                    self.required_account("commission_account"),
+                    self.account_for_required_field("commission_account"),
                     commission_amount,
                     self.currency,
                 )
@@ -713,7 +716,7 @@ class TransferPostings(TransactionPostings):
         postings.append(
             Posting.plain(
                 self.row,
-                self.required_account(source_field),
+                self.account_for_required_field(source_field),
                 -source_amount,
                 self.currency,
             )
