@@ -20,7 +20,7 @@ class Posting:
     currency: str
     total_price_amount: Decimal | None = None
     total_price_currency: str = ""
-    flag: str = ""
+    flagged: bool = False
 
     @classmethod
     def plain(
@@ -30,7 +30,7 @@ class Posting:
         amount: Decimal,
         currency: str,
     ) -> "Posting":
-        return cls(account, amount, currency, flag=cls.flag_for(row, account))
+        return cls(account, amount, currency, flagged=cls.is_flagged(row, account))
 
     @classmethod
     def from_expense_amount_fields(
@@ -77,14 +77,21 @@ class Posting:
             currency,
             total_price_amount,
             total_price_currency,
-            cls.flag_for(row, account),
+            cls.is_flagged(row, account),
         )
 
     @staticmethod
-    def flag_for(row: ReviewRow, account: str) -> str:
-        if row.review_level == "manual" and account in row.reasons.flagged_accounts():
-            return "!"
-        return ""
+    def is_flagged(row: ReviewRow, account: str) -> bool:
+        return row.review_level == "manual" and account in row.reasons.flagged_accounts()
+
+    def format(self, implicit: bool = False) -> str:
+        flag = "! " if self.flagged else ""
+        line = f"  {flag}{self.account}"
+        if not implicit:
+            line += f"  {self.amount:.2f} {self.currency}"
+        if self.total_price_amount is not None and self.total_price_currency:
+            line += f" @@ {self.total_price_amount:.2f} {self.total_price_currency}"
+        return line
 
 
 @dataclass(frozen=True)
@@ -105,13 +112,7 @@ class TransactionDraft:
             lines.append(f"  {key}: {quote(value)}")
         implicit_index = self.implicit_posting_index()
         for index, posting in enumerate(self.postings):
-            flag = f"{posting.flag} " if posting.flag else ""
-            line = f"  {flag}{posting.account}"
-            if index != implicit_index:
-                line += f"  {posting.amount:.2f} {posting.currency}"
-            if posting.total_price_amount is not None and posting.total_price_currency:
-                line += f" @@ {posting.total_price_amount:.2f} {posting.total_price_currency}"
-            lines.append(line)
+            lines.append(posting.format(implicit=index == implicit_index))
         return "\n".join(lines) + "\n"
 
     def implicit_posting_index(self) -> int | None:
