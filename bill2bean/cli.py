@@ -177,15 +177,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         outputs: dict[str, list[str]] = {args.output: [normal_text]}
         if investment_exporter:
-            investment_result = investment_exporter.render()
-            if investment_result.transactions:
+            if investment_transactions := investment_exporter.render_transactions():
                 outputs.setdefault(args.fund_output, []).append(
-                    investment_result.transactions
+                    investment_transactions
                 )
-            if investment_price_source.existing_directives or investment_result.prices:
-                merged_prices = investment_price_source.merged_with(
-                    investment_result.prices
-                )
+            investment_prices = investment_exporter.render_prices()
+            if investment_price_source.existing_directives or investment_prices:
+                merged_prices = investment_price_source.merged_with(investment_prices)
                 outputs.setdefault(args.price_output, []).append(merged_prices)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)

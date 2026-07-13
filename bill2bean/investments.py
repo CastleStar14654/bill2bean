@@ -99,12 +99,6 @@ class Price:
 
 
 @dataclass(frozen=True)
-class InvestmentExportResult:
-    transactions: str
-    prices: str
-
-
-@dataclass(frozen=True)
 class InvestmentCommoditySource:
     path: str | Path
 
@@ -370,14 +364,14 @@ class InvestmentExporter:
             tags_links=format_tags_links(row.get("tags", ""), row.get("links", "")),
         )
 
-    def render(self) -> InvestmentExportResult:
+    def render_transactions(self) -> str:
         rendered = [draft.format() for draft in self.transaction_drafts]
-        return InvestmentExportResult(
-            transactions="\n".join(chunk for chunk in rendered if chunk).rstrip() + "\n"
-            if rendered
-            else "",
-            prices=self.fetched_prices.rstrip() + "\n" if self.fetched_prices.strip() else "",
-        )
+        if not rendered:
+            return ""
+        return "\n".join(chunk for chunk in rendered if chunk).rstrip() + "\n"
+
+    def render_prices(self) -> str:
+        return self.fetched_prices.rstrip() + "\n" if self.fetched_prices.strip() else ""
 
     def required_accounts(self) -> set[str]:
         accounts: set[str] = set()
@@ -399,37 +393,6 @@ class InvestmentExporter:
                     row.discount_account or self.fund_config.discount_income_account
                 )
         return {account for account in accounts if account}
-
-
-def render_fund_export(
-    rows: list[ReviewRow],
-    commodities_path: str | Path,
-    price_text: str,
-    fund_config: FundConfig,
-    fetch_prices: bool = False,
-    bean_price_command: str = "bean-price",
-) -> InvestmentExportResult:
-    return InvestmentExporter(
-        tuple(rows),
-        InvestmentCommoditySource(commodities_path),
-        InvestmentPriceSource.from_text(price_text),
-        fund_config,
-        fetch_prices=fetch_prices,
-        bean_price_command=bean_price_command,
-    ).render()
-
-
-def required_accounts_for_fund_export(
-    rows: list[ReviewRow],
-    commodities_path: str | Path,
-    fund_config: FundConfig,
-) -> set[str]:
-    return InvestmentExporter(
-        tuple(rows),
-        InvestmentCommoditySource(commodities_path),
-        InvestmentPriceSource.from_text(""),
-        fund_config,
-    ).required_accounts()
 
 
 def parse_commodities(path: str | Path) -> list[InvestmentCommodity]:
