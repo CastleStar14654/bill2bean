@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 import re
-from typing import ClassVar
+from typing import ClassVar, Generic, TypeVar
+
+
+PostingT = TypeVar("PostingT", bound="BasePosting")
 
 
 def quote(value: str) -> str:
@@ -37,6 +40,31 @@ class BasePosting:
 
     def format_suffix(self, line: str) -> str:
         return line
+
+
+@dataclass(frozen=True)
+class BaseTransactionDraft(Generic[PostingT]):
+    date: str
+    payee: str
+    narration: str
+    metadata: list[tuple[str, str]]
+    postings: list[PostingT]
+    tags_links: str = ""
+
+    def format(self) -> str:
+        payee = quote(self.payee)
+        narration = quote(self.narration)
+        suffix = f" {self.tags_links}" if self.tags_links else ""
+        lines = [f"{self.date} * {payee} {narration}{suffix}"]
+        for key, value in self.metadata:
+            lines.append(f"  {key}: {quote(value)}")
+        implicit_index = self.implicit_posting_index()
+        for index, posting in enumerate(self.postings):
+            lines.append(posting.format(implicit=index == implicit_index))
+        return "\n".join(lines) + "\n"
+
+    def implicit_posting_index(self) -> int | None:
+        return None
 
 
 def format_tags_links(tags: str, links: str) -> str:

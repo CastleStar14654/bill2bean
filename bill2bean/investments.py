@@ -11,7 +11,12 @@ import sys
 
 from tqdm import tqdm
 
-from .beancount_format import BasePosting, format_decimal, format_tags_links, quote
+from .beancount_format import (
+    BasePosting,
+    BaseTransactionDraft,
+    format_decimal,
+    format_tags_links,
+)
 from .config import FundConfig
 from .discounts import DiscountAmount
 from .ledger import ReviewRow
@@ -263,21 +268,8 @@ class InvestmentPosting(BasePosting):
 
 
 @dataclass(frozen=True)
-class InvestmentTransactionDraft:
-    date: str
-    payee: str
-    narration: str
-    metadata: list[tuple[str, str]]
-    postings: list[InvestmentPosting]
-    tags_links: str = ""
-
-    def format(self) -> str:
-        suffix = f" {self.tags_links}" if self.tags_links else ""
-        lines = [f"{self.date} * {quote(self.payee)} {quote(self.narration)}{suffix}"]
-        for key, value in self.metadata:
-            lines.append(f"  {key}: {quote(value)}")
-        lines.extend(posting.format() for posting in self.postings)
-        return "\n".join(lines) + "\n"
+class InvestmentTransactionDraft(BaseTransactionDraft[InvestmentPosting]):
+    pass
 
 
 @dataclass(frozen=True)
