@@ -47,6 +47,25 @@ REVIEW_FIELDS = [
     "source_id",
 ]
 
+MANUAL_REVIEW_FIELDS = (
+    "aa_amount",
+    "share",
+    "share_amount",
+    "discount_amount",
+    "notes",
+    "tags",
+    "links",
+    "investment_units",
+    "investment_price",
+    "investment_price_date",
+    "commission_amount",
+    "receivable_account",
+    "aa_account",
+    "share_account",
+    "discount_account",
+    "commission_account",
+)
+
 
 @dataclass
 class ReviewRow:
@@ -536,20 +555,47 @@ def merge_previous_review_rows(
 
 
 def merge_previous_review_row(row: ReviewRow, previous: ReviewRow) -> ReviewRow:
-    if is_review_ok(previous) or not is_review_ok(row):
-        merged = ReviewRow.from_dict(row.to_dict())
-        for field in REVIEW_FIELDS:
-            setattr(merged, field, getattr(previous, field))
-        merged.uid = row.uid
-        return merged
+    if not is_review_ok(previous):
+        if row.reasons.has("enriched_from_credit_card"):
+            return generated_row_preserving_previous_manual_fields(
+                row,
+                previous,
+                "regenerated_enriched_over_previous_review",
+            )
 
+        if is_review_ok(row):
+            return generated_row_preserving_previous_manual_fields(
+                row,
+                previous,
+                "regenerated_ok_over_previous_review",
+            )
+
+    return previous_review_overrides_generated_row(row, previous)
+
+
+def previous_review_overrides_generated_row(
+    row: ReviewRow,
+    previous: ReviewRow,
+) -> ReviewRow:
     merged = ReviewRow.from_dict(row.to_dict())
-    for field in ("notes", "tags", "links"):
+    for field in REVIEW_FIELDS:
+        setattr(merged, field, getattr(previous, field))
+    merged.uid = row.uid
+    return merged
+
+
+def generated_row_preserving_previous_manual_fields(
+    row: ReviewRow,
+    previous: ReviewRow,
+    reason: str,
+) -> ReviewRow:
+    merged = ReviewRow.from_dict(row.to_dict())
+    for field in MANUAL_REVIEW_FIELDS:
         previous_value = getattr(previous, field)
         if previous_value:
             setattr(merged, field, previous_value)
     reasons = merged.reasons
-    reasons.add("regenerated_ok_over_previous_review")
+    reasons.add(reason)
     merged.review_reason = str(reasons)
     return merged
 
