@@ -7,9 +7,9 @@ import sys
 from .config import Config
 from .exporter import BeanExporter, ExportDefaults, ReviewRowFilter
 from .investments import (
-    InvestmentCommodities,
+    InvestmentCommoditySource,
     InvestmentExporter,
-    InvestmentPrices,
+    InvestmentPriceSource,
 )
 from .ledger import TransactionList, extract_accounts, read_review_csv
 from .parsers import parser_for
@@ -143,12 +143,14 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     exporter = BeanExporter(export_defaults, rows=filtered_rows)
-    investment_prices = InvestmentPrices.from_path(args.price_output) if fund_enabled else None
+    investment_price_source = (
+        InvestmentPriceSource.from_path(args.price_output) if fund_enabled else None
+    )
     investment_exporter = (
         InvestmentExporter(
             filtered_rows,
-            InvestmentCommodities(args.fund_commodities),
-            investment_prices,
+            InvestmentCommoditySource(args.fund_commodities),
+            investment_price_source,
             config.funds,
             fetch_prices=args.fetch_fund_prices,
             bean_price_command=args.bean_price_command,
@@ -180,8 +182,10 @@ def main(argv: list[str] | None = None) -> int:
                 outputs.setdefault(args.fund_output, []).append(
                     investment_result.transactions
                 )
-            if investment_prices.existing_directives or investment_result.prices:
-                merged_prices = investment_prices.merged_with(investment_result.prices)
+            if investment_price_source.existing_directives or investment_result.prices:
+                merged_prices = investment_price_source.merged_with(
+                    investment_result.prices
+                )
                 outputs.setdefault(args.price_output, []).append(merged_prices)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)

@@ -54,7 +54,7 @@ class InvestmentExportResult:
 
 
 @dataclass(frozen=True)
-class InvestmentCommodities:
+class InvestmentCommoditySource:
     path: str | Path
 
     @cached_property
@@ -100,16 +100,16 @@ class InvestmentCommodities:
 
 
 @dataclass(frozen=True)
-class InvestmentPrices:
+class InvestmentPriceSource:
     path: str | Path = ""
     inline_text: str | None = None
 
     @classmethod
-    def from_path(cls, path: str | Path) -> "InvestmentPrices":
+    def from_path(cls, path: str | Path) -> "InvestmentPriceSource":
         return cls(path=path)
 
     @classmethod
-    def from_text(cls, text: str) -> "InvestmentPrices":
+    def from_text(cls, text: str) -> "InvestmentPriceSource":
         return cls(inline_text=text)
 
     @cached_property
@@ -237,8 +237,8 @@ class InvestmentTransactionDraft:
 @dataclass(frozen=True)
 class InvestmentExporter:
     rows: list[ReviewRow]
-    commodities: InvestmentCommodities
-    prices: InvestmentPrices
+    commodity_source: InvestmentCommoditySource
+    price_source: InvestmentPriceSource
     fund_config: FundConfig
     fetch_prices: bool = False
     bean_price_command: str = "bean-price"
@@ -249,28 +249,34 @@ class InvestmentExporter:
             trade
             for row in self.rows
             if row.action == "invest"
-            for trade in [_fund_trade_for_row(row, self.commodities.items)]
+            for trade in [_fund_trade_for_row(row, self.commodity_source.items)]
             if trade is not None
         ]
 
     @cached_property
     def missing_dates(self) -> list[date]:
-        return missing_price_dates(self.trades, self.fund_config, self.prices.existing_prices)
+        return missing_price_dates(
+            self.trades,
+            self.fund_config,
+            self.price_source.existing_prices,
+        )
 
     @cached_property
     def fetched_prices(self) -> str:
         if not self.fetch_prices or not self.missing_dates:
             return ""
         return fetch_price_directives(
-            self.commodities.path,
+            self.commodity_source.path,
             self.missing_dates,
             bean_price_command=self.bean_price_command,
         )
 
     @cached_property
     def price_table(self) -> dict[tuple[str, str], Price]:
-        return InvestmentPrices.parse_text(
-            "\n".join(part for part in [self.prices.text, self.fetched_prices] if part)
+        return InvestmentPriceSource.parse_text(
+            "\n".join(
+                part for part in [self.price_source.text, self.fetched_prices] if part
+            )
         )
 
     @cached_property
@@ -321,8 +327,8 @@ def render_fund_export(
 ) -> InvestmentExportResult:
     return InvestmentExporter(
         rows,
-        InvestmentCommodities(commodities_path),
-        InvestmentPrices.from_text(price_text),
+        InvestmentCommoditySource(commodities_path),
+        InvestmentPriceSource.from_text(price_text),
         fund_config,
         fetch_prices=fetch_prices,
         bean_price_command=bean_price_command,
@@ -336,26 +342,26 @@ def required_accounts_for_fund_export(
 ) -> set[str]:
     return InvestmentExporter(
         rows,
-        InvestmentCommodities(commodities_path),
-        InvestmentPrices.from_text(""),
+        InvestmentCommoditySource(commodities_path),
+        InvestmentPriceSource.from_text(""),
         fund_config,
     ).required_accounts()
 
 
 def parse_commodities(path: str | Path) -> list[InvestmentCommodity]:
-    return InvestmentCommodities(path).items
+    return InvestmentCommoditySource(path).items
 
 
 def parse_prices(text: str) -> dict[tuple[str, str], Price]:
-    return InvestmentPrices.parse_text(text)
+    return InvestmentPriceSource.parse_text(text)
 
 
 def extract_price_directives(text: str) -> str:
-    return InvestmentPrices.extract_directives(text)
+    return InvestmentPriceSource.extract_directives(text)
 
 
 def merge_price_directives(*texts: str) -> str:
-    return InvestmentPrices.merge_directives(*texts)
+    return InvestmentPriceSource.merge_directives(*texts)
 
 
 def missing_price_dates(
