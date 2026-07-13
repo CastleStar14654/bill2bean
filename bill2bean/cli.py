@@ -7,9 +7,9 @@ import sys
 from .config import Config
 from .exporter import BeanExporter, ExportDefaults, ReviewRowFilter
 from .investments import (
+    InvestmentCommodities,
     InvestmentExporter,
-    extract_price_directives,
-    merge_price_directives,
+    InvestmentPrices,
 )
 from .ledger import TransactionList, extract_accounts, read_review_csv
 from .parsers import parser_for
@@ -143,12 +143,12 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     exporter = BeanExporter(export_defaults, rows=filtered_rows)
-    price_text = read_text_if_exists(args.price_output) if fund_enabled else ""
+    investment_prices = InvestmentPrices.from_path(args.price_output) if fund_enabled else None
     investment_exporter = (
         InvestmentExporter(
             filtered_rows,
-            args.fund_commodities,
-            price_text,
+            InvestmentCommodities(args.fund_commodities),
+            investment_prices,
             config.funds,
             fetch_prices=args.fetch_fund_prices,
             bean_price_command=args.bean_price_command,
@@ -175,12 +175,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         outputs: dict[str, list[str]] = {args.output: [normal_text]}
         if investment_exporter:
-            existing_prices = extract_price_directives(price_text)
-            fund_result = investment_exporter.render()
-            if fund_result.transactions:
-                outputs.setdefault(args.fund_output, []).append(fund_result.transactions)
-            if existing_prices or fund_result.prices:
-                merged_prices = merge_price_directives(existing_prices, fund_result.prices)
+            investment_result = investment_exporter.render()
+            if investment_result.transactions:
+                outputs.setdefault(args.fund_output, []).append(
+                    investment_result.transactions
+                )
+            if investment_prices.existing_directives or investment_result.prices:
+                merged_prices = investment_prices.merged_with(investment_result.prices)
                 outputs.setdefault(args.price_output, []).append(merged_prices)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
@@ -203,15 +204,6 @@ def _zip_password_provider(password: str | None):
     if password is not None:
         return lambda _path: password
     return lambda path: getpass.getpass(f"Password for {path}: ")
-
-
-def read_text_if_exists(path: str) -> str:
-    from pathlib import Path
-
-    target = Path(path)
-    if not target.exists():
-        return ""
-    return target.read_text(encoding="utf-8")
 
 
 def write_chunks(path: str, chunks: list[str]) -> None:

@@ -48,9 +48,52 @@ class Price:
 
 
 @dataclass(frozen=True)
-class FundExportResult:
+class InvestmentExportResult:
     transactions: str
     prices: str
+
+
+@dataclass(frozen=True)
+class InvestmentCommodities:
+    path: str | Path
+
+    @cached_property
+    def items(self) -> list[InvestmentCommodity]:
+        return parse_commodities(self.path)
+
+
+@dataclass(frozen=True)
+class InvestmentPrices:
+    path: str | Path = ""
+    inline_text: str | None = None
+
+    @classmethod
+    def from_path(cls, path: str | Path) -> "InvestmentPrices":
+        return cls(path=path)
+
+    @classmethod
+    def from_text(cls, text: str) -> "InvestmentPrices":
+        return cls(inline_text=text)
+
+    @cached_property
+    def text(self) -> str:
+        if self.inline_text is not None:
+            return self.inline_text
+        target = Path(self.path)
+        if not target.exists():
+            return ""
+        return target.read_text(encoding="utf-8")
+
+    @cached_property
+    def existing_directives(self) -> str:
+        return extract_price_directives(self.text)
+
+    @cached_property
+    def existing_prices(self) -> dict[tuple[str, str], Price]:
+        return parse_prices(self.text)
+
+    def merged_with(self, fetched_prices: str) -> str:
+        return merge_price_directives(self.existing_directives, fetched_prices)
 
 
 @dataclass(frozen=True)
@@ -128,15 +171,11 @@ class InvestmentTransactionDraft:
 @dataclass(frozen=True)
 class InvestmentExporter:
     rows: list[ReviewRow]
-    commodities_path: str | Path
-    price_text: str
+    commodities: InvestmentCommodities
+    prices: InvestmentPrices
     fund_config: FundConfig
     fetch_prices: bool = False
     bean_price_command: str = "bean-price"
-
-    @cached_property
-    def commodities(self) -> list[InvestmentCommodity]:
-        return parse_commodities(self.commodities_path)
 
     @cached_property
     def trades(self) -> list[FundTrade]:
@@ -144,44 +183,40 @@ class InvestmentExporter:
             trade
             for row in self.rows
             if row.action == "invest"
-            for trade in [_fund_trade_for_row(row, self.commodities)]
+            for trade in [_fund_trade_for_row(row, self.commodities.items)]
             if trade is not None
         ]
 
     @cached_property
-    def existing_prices(self) -> dict[tuple[str, str], Price]:
-        return parse_prices(self.price_text)
-
-    @cached_property
     def missing_dates(self) -> list[date]:
-        return missing_price_dates(self.trades, self.fund_config, self.existing_prices)
+        return missing_price_dates(self.trades, self.fund_config, self.prices.existing_prices)
 
     @cached_property
     def fetched_prices(self) -> str:
         if not self.fetch_prices or not self.missing_dates:
             return ""
         return fetch_price_directives(
-            self.commodities_path,
+            self.commodities.path,
             self.missing_dates,
             bean_price_command=self.bean_price_command,
         )
 
     @cached_property
-    def prices(self) -> dict[tuple[str, str], Price]:
+    def price_table(self) -> dict[tuple[str, str], Price]:
         return parse_prices(
-            "\n".join(part for part in [self.price_text, self.fetched_prices] if part)
+            "\n".join(part for part in [self.prices.text, self.fetched_prices] if part)
         )
 
     @cached_property
     def transaction_drafts(self) -> list[InvestmentTransactionDraft]:
         return [
-            _fund_trade_draft(trade, self.fund_config, self.prices)
+            _fund_trade_draft(trade, self.fund_config, self.price_table)
             for trade in self.trades
         ]
 
-    def render(self) -> FundExportResult:
+    def render(self) -> InvestmentExportResult:
         rendered = [draft.format() for draft in self.transaction_drafts]
-        return FundExportResult(
+        return InvestmentExportResult(
             transactions="\n".join(chunk for chunk in rendered if chunk).rstrip() + "\n"
             if rendered
             else "",
@@ -217,11 +252,11 @@ def render_fund_export(
     fund_config: FundConfig,
     fetch_prices: bool = False,
     bean_price_command: str = "bean-price",
-) -> FundExportResult:
+) -> InvestmentExportResult:
     return InvestmentExporter(
         rows,
-        commodities_path,
-        price_text,
+        InvestmentCommodities(commodities_path),
+        InvestmentPrices.from_text(price_text),
         fund_config,
         fetch_prices=fetch_prices,
         bean_price_command=bean_price_command,
@@ -233,7 +268,12 @@ def required_accounts_for_fund_export(
     commodities_path: str | Path,
     fund_config: FundConfig,
 ) -> set[str]:
-    return InvestmentExporter(rows, commodities_path, "", fund_config).required_accounts()
+    return InvestmentExporter(
+        rows,
+        InvestmentCommodities(commodities_path),
+        InvestmentPrices.from_text(""),
+        fund_config,
+    ).required_accounts()
 
 
 def parse_commodities(path: str | Path) -> list[InvestmentCommodity]:
