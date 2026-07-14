@@ -520,7 +520,7 @@ class OutflowPostings(TransactionPostings):
 
     @cached_property
     def aa_amount(self) -> Decimal:
-        return self.row.nonnegative_decimal_field("aa_amount", "0")
+        return self.row.decimal_field("aa_amount", "0")
 
     def reject_priced_split(self) -> None:
         if not self.row.get("original_amount") and not self.row.get("original_currency"):

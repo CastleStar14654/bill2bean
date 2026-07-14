@@ -108,7 +108,7 @@ python3 -m bill2bean.cli export review.csv -o imported.bean \
 
 ## Sharing And Reimbursement
 
-共同支出用 `share` 字段处理，偶发对外 AA 用 `aa_amount`。计算顺序是先扣除 `aa_amount`，再基于剩余实付净额计算 `share`。
+共同支出用 `share` 字段处理，偶发对外 AA 或同笔支付中的资产拆分用 `aa_amount`。`aa_amount` 可以为正或负；导出时会把这个带符号金额写入 `aa_account`，并从主支出或报销金额中扣除，再基于剩余实付净额计算 `share`。
 
 - `share=split`：剩余实付净额一半进入 `share_account`。
 - `share=whole`：剩余实付净额全部进入 `share_account`，适合亲属卡个人支出。
@@ -116,7 +116,7 @@ python3 -m bill2bean.cli export review.csv -o imported.bean \
 
 `share_account` 的默认值来自 `default_share_account`。review 生成时，所有支出行都会带出 `receivable_account`、`aa_account` 和 `share_account`，方便人工把普通支出改成报销、AA 或共同支出；非支出行不会填这些无关账户。微信亲属卡和支付宝亲情卡交易会自动标记 `share=whole`。
 
-`aa_amount` 也可以用于一笔支付中混有资产增加的场景，例如当餐消费和储值充值在同一笔支付中结算：把实际储值净增加额填入 `aa_amount`，把 `aa_account` 设为对应储值资产账户。可用 `aa_account_rules` 为固定商户预填这个账户；金额仍需在 review 中人工填写。
+`aa_amount` 也可以用于一笔支付中混有储值资产变化的场景。例如当餐消费和储值充值在同一笔支付中结算时，把实际储值净增加额填入正的 `aa_amount`；如果本次消费由已有储值余额覆盖了一部分，则填入负的 `aa_amount`。`aa_account` 设为对应储值资产账户。可用 `aa_account_rules` 为固定商户预填这个账户；金额仍需在 review 中人工填写。
 
 `action=reimburse` 用于公务报销等场景。默认整笔实付净额进入 `receivable_account`；如果同时填写 `aa_amount`，则 `aa_amount` 进入 `aa_account`，剩余净额进入 `receivable_account`。报销条目支持 `discount_amount`，也支持通过 `original_amount/original_currency` 记录外币原始金额；但外币 priced posting 不会自动和 `aa_amount` 拆分，二者同时出现会报错。`reimburse` 与 `share` 不应共存；如果同时填写，会标记 `manual` 并添加 `reimburse_overrides_share`，导出仍按报销处理。
 
