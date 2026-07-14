@@ -31,6 +31,10 @@ account = "Liabilities:Credit:Bank:FXCard5678"
 pattern = "工商银行储蓄卡\\(1234\\)"
 account = "Assets:Current:Bank:Checking1234"
 
+[[aa_account_rules]]
+pattern = "示例储值餐厅"
+account = "Assets:Prepaid:Dining:ExampleRestaurant"
+
 [[expense_rules]]
 pattern = "咖啡|奶茶|饮品|甜汤|饮品店|示例饮品品牌"
 account = "Expenses:Food:Drink"

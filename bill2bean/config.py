@@ -101,6 +101,7 @@ class Config:
     icbc_foreign_card_suffixes: set[str]
     icbc_default_rmb_card_suffix: str
     account_rules: list[RegexRule]
+    aa_account_rules: list[RegexRule]
     expense_rules: list[RegexRule]
     income_rules: list[RegexRule]
     merchant_alias_rules: list[MerchantAliasRule]
@@ -159,6 +160,10 @@ class Config:
             icbc_default_rmb_card_suffix=str(icbc.get("default_rmb_card_suffix", "")),
             account_rules=[
                 RegexRule(r["pattern"], r["account"]) for r in data.get("account_rules", [])
+            ],
+            aa_account_rules=[
+                RegexRule(r["pattern"], r["account"])
+                for r in data.get("aa_account_rules", [])
             ],
             expense_rules=[
                 RegexRule(r["pattern"], r["account"]) for r in data.get("expense_rules", [])
@@ -258,6 +263,13 @@ class Config:
             if rule.matches(text):
                 return rule.account
         return self.default_expense_account
+
+    def aa_account_for(self, tx: BillTransaction) -> str:
+        text = self.text_for(tx)
+        for rule in self.aa_account_rules:
+            if rule.matches(text):
+                return rule.account
+        return self.aa_account
 
     def income_account_for(self, tx: BillTransaction) -> str:
         text = self.text_for(tx)

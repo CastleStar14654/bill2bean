@@ -332,7 +332,7 @@ class TransactionNormalizer:
 
     def _apply_common_accounts(self, tx: BillTransaction) -> None:
         tx.fill_relevant_review_accounts(
-            self.config.aa_account,
+            self.config.aa_account_for(tx),
             self.config.reimburse_account,
             self.config.default_share_account,
         )
