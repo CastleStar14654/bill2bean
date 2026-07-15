@@ -93,6 +93,7 @@ class Config:
     default_share_account: str
     discount_income_account: str
     default_commission_account: str
+    coupon_account: str
     alipay_balance_account: str
     alipay_yuebao_account: str
     alipay_huabei_account: str
@@ -133,6 +134,10 @@ class Config:
             discount_income_account=defaults.get("discount_income_account", "Income:Other"),
             default_commission_account=defaults.get(
                 "commission_account", "Expenses:Commissions"
+            ),
+            coupon_account=defaults.get(
+                "coupon_account",
+                "Assets:Prepaid:Coupon",
             ),
             alipay_balance_account=defaults.get(
                 "alipay_balance_account",

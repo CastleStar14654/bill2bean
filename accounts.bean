@@ -11,6 +11,7 @@ option "operating_currency" "CNY"
 2020-01-01 open Assets:Receivables:Employer CNY
 2020-01-01 open Assets:Receivables:Partner CNY
 2020-01-01 open Assets:Receivables:Other CNY
+2020-01-01 open Assets:Prepaid:Coupon
 2020-01-01 open Assets:Prepaid:Dining:ExampleRestaurant CNY
 2020-01-01 open Assets:Unknown
 

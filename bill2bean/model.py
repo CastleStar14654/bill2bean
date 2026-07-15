@@ -122,6 +122,7 @@ class BillTransaction:
     share_amount: str = ""
     discount_account: str = ""
     discount_amount: str = ""
+    coupon_label: str = ""
     investment_units: str = ""
     investment_price: str = ""
     investment_price_date: str = ""

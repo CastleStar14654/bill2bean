@@ -13,6 +13,7 @@ from .beancount_format import (
     BaseTransactionDraft,
     escape_directive_value,
     format_tags_links,
+    quote,
 )
 from .discounts import parse_deduction_discount_amount
 from .export_base import BaseTransactionExporter
@@ -21,6 +22,7 @@ from .ledger import ReviewRow, read_review_csv
 
 @dataclass(frozen=True)
 class Posting(BasePosting):
+    coupon_label: str = ""
     total_price_amount: Decimal | None = None
     total_price_currency: str = ""
     supports_implicit_amount = True
@@ -47,6 +49,7 @@ class Posting(BasePosting):
         account: str,
         amount: Decimal,
         currency: str,
+        coupon_label: str = "",
     ) -> "Posting":
         original_amount = row.get("original_amount")
         original_currency = row.get("original_currency")
@@ -67,7 +70,13 @@ class Posting(BasePosting):
                 amount,
                 currency,
             )
-        return cls.plain(row, account, amount, currency)
+        return cls(
+            account=account,
+            amount=f"{amount:.2f}",
+            currency=currency,
+            coupon_label=coupon_label,
+            flagged=cls.is_flagged(row, account),
+        )
 
     @classmethod
     def with_total_price(
@@ -93,6 +102,11 @@ class Posting(BasePosting):
         return row.review_level == "manual" and account in row.reasons.flagged_accounts()
 
     def format_suffix(self, line: str) -> str:
+        if self.coupon_label:
+            line += (
+                f" {{1.00 {self.currency}, "
+                f"{quote(self.coupon_label)}}}"
+            )
         if self.total_price_amount is not None and self.total_price_currency:
             line += f" @@ {self.total_price_amount:.2f} {self.total_price_currency}"
         return line
@@ -102,6 +116,8 @@ class Posting(BasePosting):
 class TransactionDraft(BaseTransactionDraft[Posting]):
     def implicit_posting_index(self) -> int | None:
         if len(self.postings) != 2:
+            return None
+        if any(posting.coupon_label for posting in self.postings):
             return None
         if any(posting.total_price_amount is not None for posting in self.postings):
             return None
@@ -131,6 +147,7 @@ class ExportDefaults:
     share_account: str = ""
     discount_account: str = ""
     commission_account: str = ""
+    coupon_account: str = ""
 
     @classmethod
     def from_config(cls, config) -> "ExportDefaults":
@@ -140,6 +157,7 @@ class ExportDefaults:
             share_account=config.default_share_account,
             discount_account=config.discount_income_account,
             commission_account=config.default_commission_account,
+            coupon_account=config.coupon_account,
         )
 
     def account_for(self, field: str) -> str:
@@ -457,6 +475,7 @@ class OutflowPostings(TransactionPostings):
             if self.amount >= 0
             else self.amount - discount_amount
         )
+        self.reject_coupon_conflicts()
         self.reject_priced_split()
         target_amount = gross_amount - self.aa_amount - self.share_amount
         if self.aa_amount or self.share_amount:
@@ -488,12 +507,24 @@ class OutflowPostings(TransactionPostings):
                     )
                 )
         else:
+            target_account = self.account_for_required_field(self.target_account_field)
+            if self.coupon_label and account_kind(target_account) not in {
+                "assets",
+                "liabilities",
+            }:
+                target_account = self.exporter.defaults.coupon_account
+                if not target_account:
+                    raise ValueError(
+                        "missing default coupon_account required by coupon_label"
+                        f"{self.row.context()}"
+                    )
             postings.append(
                 Posting.from_expense_amount_fields(
                     self.row,
-                    self.account_for_required_field(self.target_account_field),
+                    target_account,
                     gross_amount,
                     self.currency,
+                    coupon_label=self.coupon_label,
                 )
             )
         if discount_amount:
@@ -521,6 +552,37 @@ class OutflowPostings(TransactionPostings):
     @cached_property
     def aa_amount(self) -> Decimal:
         return self.row.decimal_field("aa_amount", "0")
+
+    @cached_property
+    def coupon_label(self) -> str:
+        return (self.row.get("coupon_label") or "").strip()
+
+    def reject_coupon_conflicts(self) -> None:
+        if not self.coupon_label:
+            return
+        action = (self.row.action or "post").strip()
+        if action != "post" or self.row.direction != "expense":
+            raise ValueError(
+                "coupon_label is only supported on post expense rows"
+                f"{self.row.context()}"
+            )
+        if self.aa_amount:
+            raise ValueError(
+                f"aa_amount is not supported with coupon_label{self.row.context()}"
+            )
+        self.reject_present_fields(
+            (
+                "share",
+                "share_amount",
+                "original_amount",
+                "original_currency",
+                "commission_amount",
+                "investment_units",
+                "investment_price",
+                "investment_price_date",
+            ),
+            "coupon rows",
+        )
 
     def reject_priced_split(self) -> None:
         if not self.row.get("original_amount") and not self.row.get("original_currency"):

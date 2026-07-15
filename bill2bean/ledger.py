@@ -19,6 +19,7 @@ REVIEW_FIELDS = [
     "share",
     "share_amount",
     "discount_amount",
+    "coupon_label",
     "notes",
     "tags",
     "links",
@@ -52,6 +53,7 @@ MANUAL_REVIEW_FIELDS = (
     "share",
     "share_amount",
     "discount_amount",
+    "coupon_label",
     "notes",
     "tags",
     "links",
@@ -76,6 +78,7 @@ class ReviewRow:
     share: str = ""
     share_amount: str = ""
     discount_amount: str = ""
+    coupon_label: str = ""
     notes: str = ""
     tags: str = ""
     links: str = ""
@@ -117,6 +120,7 @@ class ReviewRow:
             share=tx.share,
             share_amount=tx.share_amount,
             discount_amount=tx.discount_amount,
+            coupon_label=tx.coupon_label,
             notes=tx.notes,
             tags=tx.tags,
             links=tx.links,

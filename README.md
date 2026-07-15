@@ -71,7 +71,7 @@ python3 -m bill2bean.cli export review.csv -o imported.bean \
 
 ## Review CSV
 
-`review.csv` 是主要人工界面。列顺序按核对流程排列：`uid` 在行首，`action` 和 `review_level` 后面是常需人工填写的 `aa_amount`、`share`、`share_amount`、`discount_amount` 和投资覆盖字段；长的 `source_id` 放在最后。日期不单独输出，导出 Beancount 时从 `time` 取日期。
+`review.csv` 是主要人工界面。列顺序按核对流程排列：`uid` 在行首，`action` 和 `review_level` 后面是常需人工填写的 `aa_amount`、`share`、`share_amount`、`discount_amount`、`coupon_label` 和投资覆盖字段；长的 `source_id` 放在最后。日期不单独输出，导出 Beancount 时从 `time` 取日期。
 
 常用 `action`：
 
@@ -117,6 +117,8 @@ python3 -m bill2bean.cli export review.csv -o imported.bean \
 `share_account` 的默认值来自 `default_share_account`。review 生成时，所有支出行都会带出 `receivable_account`、`aa_account` 和 `share_account`，方便人工把普通支出改成报销、AA 或共同支出；非支出行不会填这些无关账户。微信亲属卡和支付宝亲情卡交易会自动标记 `share=whole`。
 
 `aa_amount` 也可以用于一笔支付中混有储值资产变化的场景。例如当餐消费和储值充值在同一笔支付中结算时，把实际储值净增加额填入正的 `aa_amount`；如果本次消费由已有储值余额覆盖了一部分，则填入负的 `aa_amount`。`aa_account` 设为对应储值资产账户。可用 `aa_account_rules` 为固定商户预填这个账户；金额仍需在 review 中人工填写。
+
+团购代金券购买可用 `coupon_label` 标记。`coupon_label` 非空时，导出会把主支出 posting 写到 `coupon_account`，或使用用户已经填入的 Assets/Liabilities 类 `expense_account`，并追加 `{1.00 <currency>, "label"}` cost；金额按成本记录，不追踪券面值。支付时优惠 `discount_amount` 会计入代金券成本，其他拆分功能不与 `coupon_label` 共存：不能同时填写 `aa_amount`、`share`、`share_amount`、`original_amount/original_currency`、`commission_amount` 或投资覆盖字段。
 
 `action=reimburse` 用于公务报销等场景。默认整笔实付净额进入 `receivable_account`；如果同时填写 `aa_amount`，则 `aa_amount` 进入 `aa_account`，剩余净额进入 `receivable_account`。报销条目支持 `discount_amount`，也支持通过 `original_amount/original_currency` 记录外币原始金额；但外币 priced posting 不会自动和 `aa_amount` 拆分，二者同时出现会报错。`reimburse` 与 `share` 不应共存；如果同时填写，会标记 `manual` 并添加 `reimburse_overrides_share`，导出仍按报销处理。
 
