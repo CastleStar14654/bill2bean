@@ -3,6 +3,7 @@
   asset-class: "fund"
   price: "CNY:eastmoneyfund/000001"
   settlement-days: "2"
+  buy-commission-percent: "0.15"
 
 2020-01-01 commodity SAMPLE_AU9999_000003
   name: "示例黄金ETF联接E"

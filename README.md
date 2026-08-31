@@ -181,7 +181,7 @@ option "booking_method" "FIFO"
 option "infer_tolerance_from_cost" "TRUE"
 ```
 
-Commodity 文件用 `name` 元数据和支付宝基金名称精确匹配，`asset-class` 决定资产账户映射，`price` 元数据供 `bean-price` 使用；`settlement-days` 可以覆盖卖出确认价格日的 T+N 规则：
+Commodity 文件用 `name` 元数据和支付宝基金名称精确匹配，`asset-class` 决定资产账户映射，`price` 元数据供 `bean-price` 使用；`settlement-days` 可以覆盖卖出确认价格日的 T+N 规则。买入费率固定的基金可以设置 `buy-commission-percent`，数值按百分比填写，导出时自动按 `申购总额 * c / (100 + c)` 计算手续费并四舍五入到分：
 
 ```beancount
 2020-01-01 commodity SAMPLE_FUND_000001
@@ -189,6 +189,7 @@ Commodity 文件用 `name` 元数据和支付宝基金名称精确匹配，`asse
   asset-class: "fund"
   price: "CNY:eastmoneyfund/000001"
   settlement-days: "2"
+  buy-commission-percent: "0.15"
 ```
 
 配置中的基金账户按 `asset-class` 映射；如果 commodity 没有 `settlement-days`，卖出确认价格日的 T+N 规则按 pattern 顺序匹配：
@@ -210,4 +211,4 @@ pattern = "QDII|纳斯达克"
 settlement_days = 2
 ```
 
-`investment_units`、`investment_price`、`investment_price_date` 可以在 CSV 中人工覆盖自动计算。`commission_amount` 非空时会额外写入手续费账户。基金买卖都会处理 `discount_amount` 和 `commission_amount`：普通数字优惠视为抵扣；`discount_amount = cb:0.10` 或 `cashback:0.10` 视为另行返现，不改变确认金额，会额外写入资金账户入账和优惠收入。`cb:` 语法只支持投资交易。
+`investment_units`、`investment_price`、`investment_price_date` 可以在 CSV 中人工覆盖自动计算。`commission_amount` 非空时会额外写入手续费账户；如果同时在 commodity 中配置了 `buy-commission-percent`，CSV 手填值优先，程序会向 stderr 输出 warning。基金买卖都会处理 `discount_amount` 和 `commission_amount`：普通数字优惠视为抵扣；`discount_amount = cb:0.10` 或 `cashback:0.10` 视为另行返现，不改变确认金额，会额外写入资金账户入账和优惠收入。`cb:` 语法只支持投资交易。

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from functools import cached_property
 from pathlib import Path
 import re
@@ -26,6 +26,7 @@ from .ledger import ReviewRow
 PRICE_DIRECTIVE_RE = re.compile(
     r"^\s*(\d{4}-\d{2}-\d{2})\s+price\s+(\S+)\s+([+-]?[0-9.]+)\s+([A-Z][A-Z0-9_]*)"
 )
+MONEY_QUANTUM = Decimal("0.01")
 
 
 @dataclass(frozen=True)
@@ -35,9 +36,17 @@ class InvestmentCommodity:
     asset_class: str
     price_source: str = ""
     settlement_days: int | None = None
+    buy_commission_percent: Decimal | None = None
 
     def settlement_text(self) -> str:
         return " ".join([self.name, self.symbol, self.asset_class, self.price_source])
+
+    @property
+    def has_buy_commission_rule(self) -> bool:
+        return (
+            self.buy_commission_percent is not None
+            and self.buy_commission_percent != 0
+        )
 
 
 @dataclass(frozen=True)
@@ -86,6 +95,28 @@ class FundTrade:
             )
         return subtract_business_days(settlement_anchor, settlement_days)
 
+    @property
+    def has_manual_commission_amount(self) -> bool:
+        return bool(self.row.commission_amount.strip())
+
+    @property
+    def manual_commission_overrides_rule(self) -> bool:
+        return (
+            self.side == "buy"
+            and self.commodity.has_buy_commission_rule
+            and self.has_manual_commission_amount
+        )
+
+    @property
+    def requires_commission_account(self) -> bool:
+        return (
+            self.has_manual_commission_amount
+            or (
+                self.side == "buy"
+                and self.commodity.has_buy_commission_rule
+            )
+        )
+
 
 @dataclass(frozen=True)
 class Price:
@@ -125,6 +156,22 @@ class InvestmentCommoditySource:
                 return None
             return int(value.strip())
 
+        def metadata_decimal(key: str) -> Decimal | None:
+            value = metadata.get(key)
+            if value is None or not value.strip():
+                return None
+            try:
+                parsed = Decimal(value.strip())
+            except InvalidOperation as exc:
+                raise ValueError(
+                    f"invalid decimal commodity metadata {key}: {value}"
+                ) from exc
+            if parsed < 0:
+                raise ValueError(
+                    f"{key} commodity metadata must be non-negative: {value}"
+                )
+            return parsed
+
         def flush() -> None:
             nonlocal current_symbol, metadata
             if current_symbol and metadata.get("name"):
@@ -137,6 +184,9 @@ class InvestmentCommoditySource:
                         settlement_days=metadata_int("settlement-days")
                         if "settlement-days" in metadata
                         else metadata_int("settlement_days"),
+                        buy_commission_percent=metadata_decimal(
+                            "buy-commission-percent"
+                        ),
                     )
                 )
             current_symbol = ""
@@ -356,6 +406,12 @@ class InvestmentExporter(
         ]
         if row.get("notes"):
             metadata.append(("note", row["notes"]))
+        if trade.manual_commission_overrides_rule:
+            print(
+                "warning: manual commission_amount overrides "
+                f"buy-commission-percent for row {row.uid or row.source_id}",
+                file=sys.stderr,
+            )
         postings = FundTradePostings(
             trade,
             self.fund_config,
@@ -387,7 +443,7 @@ class InvestmentExporter(
                         trade.commodity.asset_class
                     )
                 )
-            if row.commission_amount:
+            if trade.requires_commission_account:
                 accounts.add(row.commission_account or self.fund_config.commission_account)
             if DiscountAmount.parse(row.discount_amount).amount:
                 accounts.add(
@@ -615,7 +671,20 @@ class FundTradePostings:
 
     @cached_property
     def commission_amount(self) -> Decimal:
-        return self.row.nonnegative_decimal_field("commission_amount", "0")
+        if self.trade.has_manual_commission_amount:
+            return self.row.nonnegative_decimal_field("commission_amount", "0")
+        if self.trade.side != "buy" or not self.trade.commodity.has_buy_commission_rule:
+            return Decimal("0")
+        percent = self.trade.commodity.buy_commission_percent
+        if percent is None:
+            return Decimal("0")
+        return (
+            self.buy_commission_base * percent / (Decimal("100") + percent)
+        ).quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
+
+    @cached_property
+    def buy_commission_base(self) -> Decimal:
+        return self.amount + self.discount.fee_deduction
 
     @cached_property
     def commission_account(self) -> str:
