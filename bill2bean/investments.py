@@ -181,9 +181,7 @@ class InvestmentCommoditySource:
                         name=metadata.get("name", ""),
                         asset_class=metadata.get("asset-class", "fund"),
                         price_source=metadata.get("price", ""),
-                        settlement_days=metadata_int("settlement-days")
-                        if "settlement-days" in metadata
-                        else metadata_int("settlement_days"),
+                        settlement_days=metadata_int("settlement-days"),
                         buy_commission_percent=metadata_decimal(
                             "buy-commission-percent"
                         ),
