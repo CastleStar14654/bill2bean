@@ -332,13 +332,32 @@ class InvestmentExporter(
 
     @cached_property
     def trades(self) -> list[FundTrade]:
-        return [
-            trade
-            for row in self.rows
-            if row.action == "invest"
-            for trade in [FundTrade.from_row(row, self.commodity_source.items)]
-            if trade is not None
-        ]
+        trades: list[FundTrade] = []
+        unmatched_rows: list[ReviewRow] = []
+        for row in self.rows:
+            if row.action != "invest":
+                continue
+            trade = FundTrade.from_row(row, self.commodity_source.items)
+            if trade is None:
+                unmatched_rows.append(row)
+                continue
+            trades.append(trade)
+        if unmatched_rows:
+            raise ValueError(self.unmatched_commodity_error(unmatched_rows))
+        return trades
+
+    def unmatched_commodity_error(self, rows: list[ReviewRow]) -> str:
+        details = "\n".join(
+            f"- {row.uid or row.source_id or row.time}: "
+            f"{row.time} {row.payee} {row.narration}"
+            for row in rows
+        )
+        return (
+            "investment row does not match any commodity in "
+            f"{self.commodity_source.path}. Add a commodity with matching name "
+            "metadata, or change action to skip in review.csv:\n"
+            f"{details}"
+        )
 
     @property
     def transaction_items(self) -> list[FundTrade]:
